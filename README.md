@@ -1,4 +1,4 @@
-# Design ledger
+# Ledger
 
 A voted, linked design ledger with a live visualization. Every entry has a vote count (each vote carries a reason), any number of threaded comments, and any number of references to other entries, each reference with a comment naming the relationship. Two or more agents (or people) can fill and review it at the same time, and entries can be merged when they turn out to be duplicates.
 
@@ -35,6 +35,10 @@ Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file.
 - Changes to an entry are logged as comments with the reason.
 - A reference needs a comment describing the relationship; entries cannot reference themselves.
 - Merging moves comments and references to the surviving entry and redirects links.
+
+## License
+
+MIT, see `LICENSE`.
 
 ## Agents
 
