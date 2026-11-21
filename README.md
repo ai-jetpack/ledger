@@ -1,8 +1,7 @@
-# Ledger
+# Led
+A generic ledger designed for agentic development. Each entry contains a description defining the item in the list, the list of dependencies to other ledger entries as well as the description of the entry, and a voting track record so multiple agents can independently vote on the entry and provide a justification for their assessment, and come to a consensus or delegate the decision back to the user. 
 
-A voted, linked design ledger with a live visualization. Every entry has a vote count (each vote carries a reason), any number of threaded comments, and any number of references to other entries, each reference with a comment naming the relationship. Two or more agents (or people) can fill and review it at the same time, and entries can be merged when they turn out to be duplicates.
-
-Python 3.11+, standard library only. Data lives in one SQLite file (`ledger.db`, created on first write).
+The graph provides the necessary context for a given issue and allows mapping the complete dependency chain. 
 
 ## Files
 
