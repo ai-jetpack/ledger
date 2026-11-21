@@ -35,6 +35,10 @@ Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file.
 - A reference needs a comment describing the relationship; entries cannot reference themselves.
 - Merging moves comments and references to the surviving entry and redirects links.
 
+## Skill
+
+`.claude/skills/ledger/SKILL.md` is a Claude Code skill that teaches an agent to use the ledger: how to write entries, vote, debate, find and merge duplicates, and propagate changes. Opened in this repository, Claude Code picks it up as a project skill. To use it elsewhere, copy the folder to `~/.claude/skills/ledger/` (and use absolute paths to `ledger.py`).
+
 ## License
 
 MIT, see `LICENSE`.
