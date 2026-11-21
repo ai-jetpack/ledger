@@ -1,4 +1,4 @@
-# Led
+# Ledger
 A generic ledger designed for agentic development. Each entry contains a description defining the item in the list, the list of dependencies to other ledger entries as well as the description of the entry, and a voting track record so multiple agents can independently vote on the entry and provide a justification for their assessment, and come to a consensus or delegate the decision back to the user. 
 
 The graph provides the necessary context for a given issue and allows mapping the complete dependency chain. 
