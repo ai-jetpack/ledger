@@ -348,7 +348,13 @@ def update(con, author, eid, reason, title=None, body=None, kind=None, status=No
     if not clean(reason):
         raise LedgerError("a reason is required")
     with tx(con):
-        _entry(con, eid)
+        row = _entry(con, eid)
+        if author not in ADMINS:
+            if row["author"] != author:
+                raise LedgerError(f"{fmt_id(eid)} belongs to {row['author']}; comment on it instead")
+            if con.execute("SELECT 1 FROM comments WHERE entry_id=? AND author IN ('user','main') AND text LIKE '[edit%'",
+                           (eid,)).fetchone():
+                raise LedgerError(f"{fmt_id(eid)} records a user decision; comment on it instead of editing")
         sets = ", ".join(f"{k}=?" for k in changes) + ", updated_at=?"
         con.execute(f"UPDATE entries SET {sets} WHERE id=?", (*changes.values(), now(), eid))
         _comment(con, eid, author, f"[edit: {', '.join(changes)}] {clean(reason)}")
