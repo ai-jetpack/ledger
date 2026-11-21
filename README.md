@@ -1,0 +1,45 @@
+# Design ledger
+
+A voted, linked design ledger with a live visualization. Every entry has a vote count (each vote carries a reason), any number of threaded comments, and any number of references to other entries, each reference with a comment naming the relationship. Two or more agents (or people) can fill and review it at the same time, and entries can be merged when they turn out to be duplicates.
+
+Python 3.11+, standard library only. Data lives in one SQLite file (`ledger.db`, created on first write).
+
+## Files
+
+| File | What |
+| --- | --- |
+| `ledger_api.py` | The ledger API: the only code that touches the database. Every client below goes through it. |
+| `ledger.py` | Command line over the API |
+| `ledger_mcp.py` | MCP server over the API for agents (`--author NAME`; the author is fixed per server, no delete or edit-others operations) |
+| `ledger_viz.py`, `viewer.html` | Visualization: live force-directed graph, sortable table, disputes view, activity feed; refreshes about once a second while the ledger changes |
+
+## Quick start
+
+```
+python ledger.py add --kind requirement --title "Single-file store" --body "One file, safe for several writers" --author me
+python ledger.py add --kind decision --title "Use SQLite" --author me --ref "L-0001:implements"
+python ledger.py vote L-0002 up --author me --reason "Fits the single-file requirement"
+python ledger.py list
+python ledger_viz.py serve            # http://127.0.0.1:8765
+```
+
+Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file. The first entry has nothing to reference yet; later entries through the MCP server must carry at least one reference.
+
+## Commands
+
+`add`, `update`, `show`, `list`, `dump`, `comment`, `vote`, `link`, `unlink`, `merge`, `similar` (candidate duplicates), `disagreements` (split votes), `queue VOTER` (entries a voter has not voted on or that changed since their vote), `check`, `export` (Markdown), `backup` (consistent copy of the database). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`) are limited to the authors `main` and `user`.
+
+## Rules the tool enforces
+
+- One vote per voter per entry; a vote needs a reason, and re-voting replaces the old vote (the reason is kept as a comment).
+- Changes to an entry are logged as comments with the reason.
+- A reference needs a comment describing the relationship; entries cannot reference themselves.
+- Merging moves comments and references to the surviving entry and redirects links.
+
+## Agents
+
+`python ledger_mcp.py --author alpha` serves the API over MCP (stdio). Example `.mcp.json` entry:
+
+```json
+{ "mcpServers": { "ledger-alpha": { "command": "python", "args": ["ledger_mcp.py", "--author", "alpha"] } } }
+```

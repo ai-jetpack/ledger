@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Ledger</title>
+<style>
+:root{
+  --bg:#f7f7f5;--panel:#ffffff;--ink:#1d1d1b;--quiet:#6b6b66;--rule:#e3e2dc;--accent:#2f6fde;
+  --good:#2e8b57;--bad:#c8453b;--warn:#d98a00;--edge:rgba(60,60,55,.18);--edgeHi:rgba(47,111,222,.85);--chip:#efeee9;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root{
+  --bg:#151514;--panel:#1d1d1b;--ink:#ecebe6;--quiet:#9b9a93;--rule:#33332f;--accent:#6e9cf0;
+  --good:#5cbf86;--bad:#e5736a;--warn:#f0b040;--edge:rgba(220,220,210,.14);--edgeHi:rgba(110,156,240,.9);--chip:#2a2a27;
+  color-scheme:dark;}}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;align-items:center;gap:16px;padding:8px 16px;border-bottom:1px solid var(--rule);background:var(--panel);flex-wrap:wrap}
+header h1{font-size:15px;margin:0;font-weight:650}
+.stats{color:var(--quiet);display:flex;gap:12px;flex-wrap:wrap}
+.stats b{color:var(--ink);font-weight:600}
+.tabs{display:flex;gap:4px;margin-left:auto}
+.tabs button,.btn{border:1px solid var(--rule);background:var(--panel);color:var(--ink);padding:4px 10px;border-radius:6px;cursor:pointer;font:inherit}
+.tabs button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+.live{display:flex;align-items:center;gap:6px;color:var(--quiet)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--quiet)}
+.dot.on{background:var(--good);animation:pulse 2s infinite}
+.dot.err{background:var(--bad)}
+@keyframes pulse{50%{opacity:.35}}
+.wrap{flex:1;display:grid;grid-template-columns:240px 1fr 400px;min-height:0}
+aside{background:var(--panel);overflow:auto;min-height:0}
+#left{border-right:1px solid var(--rule);padding:12px}
+#right{border-left:1px solid var(--rule);display:flex;flex-direction:column}
+main{position:relative;min-height:0;overflow:hidden}
+canvas{display:block;width:100%;height:100%;cursor:grab}
+h3{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--quiet);margin:14px 0 6px;font-weight:600}
+input[type=search],select{width:100%;padding:5px 8px;border:1px solid var(--rule);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+.kind{display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:5px;cursor:pointer;user-select:none}
+.kind:hover{background:var(--chip)}
+.kind.off{opacity:.35}
+.sw{width:10px;height:10px;border-radius:50%;flex:none}
+.kind .n{margin-left:auto;color:var(--quiet);font-variant-numeric:tabular-nums}
+label.chk{display:flex;gap:6px;align-items:center;margin:4px 0;cursor:pointer}
+.legend div{display:flex;align-items:center;gap:6px;color:var(--quiet);margin:3px 0}
+.ring{width:12px;height:12px;border-radius:50%;border:2px solid}
+#detail{padding:14px 16px;overflow:auto;flex:1;min-height:0}
+#feedBox{border-top:1px solid var(--rule);height:34%;display:flex;flex-direction:column;min-height:120px}
+#feedBox h3{margin:10px 16px 4px}
+#feed{overflow:auto;padding:0 16px 10px;flex:1}
+.ev{padding:4px 0;border-bottom:1px solid var(--rule);cursor:pointer}
+.ev.new{animation:flash 3s}
+@keyframes flash{0%{background:rgba(217,138,0,.35)}100%{background:transparent}}
+.ev .t{color:var(--quiet);font-size:11px;font-variant-numeric:tabular-nums}
+.who{font-weight:600}
+.tag{display:inline-block;padding:0 6px;border-radius:9px;background:var(--chip);font-size:11px;margin-right:4px}
+.tag.up{color:var(--good)} .tag.down{color:var(--bad)} .tag.split{color:var(--warn)}
+.empty{color:var(--quiet);padding:20px 0}
+.dt h2{font-size:16px;margin:2px 0 6px;line-height:1.3}
+.dt .meta{color:var(--quiet);margin-bottom:10px}
+.dt .body{white-space:pre-wrap;background:var(--bg);border:1px solid var(--rule);border-radius:6px;padding:8px 10px}
+.dt ul{list-style:none;padding:0;margin:0}
+.dt li{padding:4px 0;border-bottom:1px solid var(--rule)}
+a.eid{color:var(--accent);cursor:pointer;text-decoration:none;font-weight:600;font-variant-numeric:tabular-nums}
+.vote{display:flex;gap:6px}
+.vote .v{font-weight:700;width:22px}
+.c{padding:6px 0 6px 0;border-bottom:1px solid var(--rule)}
+.c .kids{margin-left:14px;border-left:2px solid var(--rule);padding-left:10px}
+.c .txt{white-space:pre-wrap}
+.table-wrap,.disp-wrap{position:absolute;inset:0;overflow:auto;padding:12px 16px}
+table{border-collapse:collapse;width:100%;background:var(--panel)}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--rule);vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);cursor:pointer;user-select:none;font-size:12px;color:var(--quiet)}
+td.num{text-align:right;font-variant-numeric:tabular-nums}
+tr:hover td{background:var(--chip);cursor:pointer}
+tr.sel td{background:rgba(47,111,222,.12)}
+.card{background:var(--panel);border:1px solid var(--rule);border-radius:8px;padding:12px;margin-bottom:12px}
+#tip{position:absolute;pointer-events:none;background:var(--panel);border:1px solid var(--rule);border-radius:6px;padding:6px 8px;max-width:320px;box-shadow:0 2px 8px rgba(0,0,0,.12);display:none;z-index:5}
+.zoom{position:absolute;right:12px;bottom:12px;display:flex;gap:4px}
+@media (max-width:1100px){.wrap{grid-template-columns:200px 1fr 320px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Design Ledger</h1>
+  <div class="stats" id="stats"></div>
+  <div class="tabs">
+    <button data-v="graph" class="on">Graph</button>
+    <button data-v="table">Table</button>
+    <button data-v="disputes">Disputes</button>
+  </div>
+  <div class="live"><span class="dot" id="dot"></span><span id="liveTxt">connecting…</span></div>
+</header>
+<div class="wrap">
+  <aside id="left">
+    <input type="search" id="q" placeholder="Search id, title, text…">
+    <h3>Status</h3>
+    <select id="status"><option value="">All statuses</option></select>
+    <h3>Show</h3>
+    <label class="chk"><input type="checkbox" id="onlyDisp"> Only split votes</label>
+    <label class="chk"><input type="checkbox" id="showMerged"> Include merged</label>
+    <label class="chk"><input type="checkbox" id="labels" checked> Labels when zoomed</label>
+    <h3>Kinds <span style="float:right;text-transform:none;letter-spacing:0"><a class="eid" id="allK">all</a> · <a class="eid" id="noK">none</a></span></h3>
+    <div id="kinds"></div>
+    <h3>Legend</h3>
+    <div class="legend">
+      <div><span class="ring" style="border-color:var(--good)"></span>net upvoted</div>
+      <div><span class="ring" style="border-color:var(--bad)"></span>net downvoted</div>
+      <div><span class="ring" style="border-color:var(--warn);border-style:dashed"></span>voters disagree</div>
+      <div><span class="ring" style="border-color:var(--accent)"></span>just changed</div>
+      <div>size = number of links</div>
+    </div>
+  </aside>
+  <main id="main">
+    <canvas id="cv"></canvas>
+    <div class="zoom"><button class="btn" id="fit">Fit</button><button class="btn" id="pause">Pause layout</button></div>
+    <div class="table-wrap" id="tableView" hidden></div>
+    <div class="disp-wrap" id="dispView" hidden></div>
+    <div id="tip"></div>
+  </main>
+  <aside id="right">
+    <div id="detail"><div class="empty">Click an entry to see its votes, references and comments.</div></div>
+    <div id="feedBox"><h3>Live activity</h3><div id="feed"></div></div>
+  </aside>
+</div>
+<script>
+const EMBED = /*__DATA__*/null;
+const LIVE = !EMBED;
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+let data = null, version = null, byId = new Map();
+const nodes = new Map();         // id -> {x,y,vx,vy,e,flash,vis,deg}
+let edges = [];                  // {s,t,c}
+let sel = null, hover = null, view = "graph", alpha = 1, paused = false;
+const filt = {q:"", off:new Set(), status:"", disp:false, merged:false};
+let seenEvents = new Set(), firstLoad = true, sortKey = "id", sortDir = 1;
+
+// ---------- colours per kind (golden-angle hues, theme aware lightness)
+const dark = matchMedia("(prefers-color-scheme: dark)").matches;
+const kindColor = {};
+function setKinds(kinds){ kinds.forEach((k,i)=>{ kindColor[k] = `hsl(${Math.round(i*137.508)%360} ${dark?55:58}% ${dark?62:46}%)`; }); }
+
+const split = e => e.up > 0 && e.down > 0;
+function sig(e){ return JSON.stringify([e.title,e.body,e.kind,e.status,e.score,e.up,e.down,e.comments.length,e.references.length,e.referenced_by.length,e.merged_into||""]); }
+
+// ---------- data ingestion
+function ingest(d){
+  const prev = byId;
+  data = d; byId = new Map(d.entries.map(e=>[e.id,e]));
+  if (!Object.keys(kindColor).length) setKinds(d.kinds);
+  const t = performance.now();
+  for (const e of d.entries){
+    let n = nodes.get(e.id);
+    if (!n){
+      const near = [...e.references, ...e.referenced_by].map(r=>nodes.get(r.id)).find(Boolean);
+      const a = Math.random()*Math.PI*2, r = near ? 30+Math.random()*30 : 150+Math.random()*150;
+      n = {x:(near?near.x:0)+Math.cos(a)*r, y:(near?near.y:0)+Math.sin(a)*r, vx:0, vy:0, flash: firstLoad?0:t};
+      nodes.set(e.id, n);
+    } else if (prev.has(e.id) && sig(prev.get(e.id)) !== sig(e)) n.flash = t;
+    n.e = e; n.id = e.id;
+  }
+  for (const id of [...nodes.keys()]) if (!byId.has(id)) nodes.delete(id);
+  edges = [];
+  for (const e of d.entries) if (!e.merged_into) for (const r of e.references) if (byId.has(r.id)) edges.push({s:e.id,t:r.id,c:r.comment});
+  for (const n of nodes.values()) n.deg = 0;
+  for (const g of edges){ nodes.get(g.s).deg++; nodes.get(g.t).deg++; }
+  alpha = Math.max(alpha, firstLoad ? 1 : 0.35);
+  applyFilter(); renderStats(); renderKinds(); renderFeed(); renderDetail();
+  if (view==="table") renderTable(); if (view==="disputes") renderDisputes();
+  if (firstLoad){ firstLoad=false; setTimeout(fit, 900); }
+}
+
+function visible(e){
+  if (e.merged_into && !filt.merged) return false;
+  if (filt.off.has(e.kind)) return false;
+  if (filt.status && e.status !== filt.status) return false;
+  if (filt.disp && !split(e)) return false;
+  if (filt.q){
+    const q = filt.q.toLowerCase();
+    if (!(e.id.toLowerCase().includes(q) || e.title.toLowerCase().includes(q) || (e.body||"").toLowerCase().includes(q))) return false;
+  }
+  return true;
+}
+function applyFilter(){ for (const n of nodes.values()) n.vis = visible(n.e); }
+
+// ---------- live polling
+async function poll(){
+  try{
+    const v = (await (await fetch("/api/version",{cache:"no-store"})).json()).version;
+    if (v !== version){
+      const d = await (await fetch("/api/ledger",{cache:"no-store"})).json();
+      version = v; ingest(d);
+    }
+    $("#dot").className = "dot on";
+    $("#liveTxt").textContent = "live · " + new Date().toLocaleTimeString();
+  }catch(err){
+    $("#dot").className = "dot err"; $("#liveTxt").textContent = "disconnected — retrying";
+  }
+  setTimeout(poll, 1000);
+}
+
+// ---------- header, filters
+function renderStats(){
+  const act = data.entries.filter(e=>!e.merged_into);
+  const merged = data.entries.length - act.length;
+  const votes = act.reduce((s,e)=>s+e.up+e.down,0);
+  const comments = act.reduce((s,e)=>s+e.comments.length,0);
+  const disp = act.filter(split).length;
+  $("#stats").innerHTML = `<span><b>${act.length}</b> entries</span><span><b>${edges.length}</b> links</span>`+
+    `<span><b>${votes}</b> votes</span><span><b>${comments}</b> comments</span>`+
+    `<span><b style="color:var(--warn)">${disp}</b> disputed</span><span><b>${merged}</b> merged</span>`;
+  const st = $("#status");
+  if (st.options.length===1) data.statuses.forEach(s=>st.add(new Option(s,s)));
+}
+function renderKinds(){
+  const cnt = {}; for (const e of data.entries) if (!e.merged_into) cnt[e.kind]=(cnt[e.kind]||0)+1;
+  $("#kinds").innerHTML = data.kinds.filter(k=>cnt[k]).map(k =>
+    `<div class="kind ${filt.off.has(k)?"off":""}" data-k="${esc(k)}"><span class="sw" style="background:${kindColor[k]}"></span>${esc(k)}<span class="n">${cnt[k]}</span></div>`).join("");
+}
+$("#kinds").addEventListener("click", ev=>{
+  const k = ev.target.closest(".kind")?.dataset.k; if (!k) return;
+  filt.off.has(k) ? filt.off.delete(k) : filt.off.add(k); refresh();
+});
+$("#allK").onclick = ()=>{ filt.off.clear(); refresh(); };
+$("#noK").onclick = ()=>{ data.kinds.forEach(k=>filt.off.add(k)); refresh(); };
+$("#q").oninput = e=>{ filt.q = e.target.value.trim(); refresh(); };
+$("#status").onchange = e=>{ filt.status = e.target.value; refresh(); };
+$("#onlyDisp").onchange = e=>{ filt.disp = e.target.checked; refresh(); };
+$("#showMerged").onchange = e=>{ filt.merged = e.target.checked; refresh(); };
+function refresh(){ applyFilter(); renderKinds(); alpha=Math.max(alpha,.3); if(view==="table") renderTable(); if(view==="disputes") renderDisputes(); }
+
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
+  view = b.dataset.v;
+  document.querySelectorAll(".tabs button").forEach(x=>x.classList.toggle("on", x===b));
+  $("#tableView").hidden = view!=="table"; $("#dispView").hidden = view!=="disputes";
+  $("#cv").style.visibility = view==="graph" ? "visible" : "hidden";
+  if (view==="table") renderTable(); if (view==="disputes") renderDisputes();
+});
+
+// ---------- detail pane
+function select(id){ sel = id; renderDetail(); if (view==="table") renderTable(); }
+document.addEventListener("click", ev=>{ const a = ev.target.closest("[data-id]"); if (a && !ev.target.closest("canvas")) { select(a.dataset.id); const n=nodes.get(a.dataset.id); if(n&&view==="graph") centerOn(n); } });
+
+function thread(comments){
+  const kids = new Map(); const tops = [];
+  for (const c of comments){ if (c.reply_to && comments.some(x=>x.id===c.reply_to)) { (kids.get(c.reply_to)||kids.set(c.reply_to,[]).get(c.reply_to)).push(c); } else tops.push(c); }
+  const one = c => `<div class="c"><div><span class="who">${esc(c.author)}</span> <span class="t" style="color:var(--quiet);font-size:11px">#${c.id} · ${esc(c.created_at.replace("T"," ").replace("Z",""))}</span></div><div class="txt">${fmtText(c.text)}</div>${(kids.get(c.id)||[]).length?`<div class="kids">${kids.get(c.id).map(one).join("")}</div>`:""}</div>`;
+  return tops.map(one).join("");
+}
+function fmtText(t){ return esc(t).replace(/\bL-\d{4}\b/g, m => byId.has(m)?`<a class="eid" data-id="${m}">${m}</a>`:m); }
+
+function renderDetail(){
+  const box = $("#detail");
+  const e = sel && byId.get(sel);
+  if (!e){ box.innerHTML = `<div class="empty">Click an entry to see its votes, references and comments.</div>`; return; }
+  const sc = e.score>0?"var(--good)":e.score<0?"var(--bad)":"var(--quiet)";
+  box.innerHTML = `<div class="dt">
+    <div class="meta"><span class="sw" style="display:inline-block;background:${kindColor[e.kind]}"></span> <b>${e.id}</b> · ${esc(e.kind)} · ${esc(e.status)} · by ${esc(e.author)}
+      ${e.merged_into?` · <span class="tag split">merged into <a class="eid" data-id="${e.merged_into}">${e.merged_into}</a></span>`:""}</div>
+    <h2>${esc(e.title)}</h2>
+    <div style="margin-bottom:10px"><span style="font-size:18px;font-weight:700;color:${sc}">${e.score>0?"+":""}${e.score}</span>
+      <span class="tag up">▲ ${e.up}</span><span class="tag down">▼ ${e.down}</span>${split(e)?'<span class="tag split">disputed</span>':""}</div>
+    ${e.body?`<div class="body">${fmtText(e.body)}</div>`:""}
+    <h3>Votes (${e.votes.length})</h3>
+    <ul>${e.votes.map(v=>`<li class="vote"><span class="v" style="color:${v.value>0?"var(--good)":"var(--bad)"}">${v.value>0?"▲":"▼"}</span><div><span class="who">${esc(v.voter)}</span>: ${fmtText(v.reason)}</div></li>`).join("")||'<li class="empty" style="padding:4px 0">none yet</li>'}</ul>
+    <h3>References (${e.references.length})</h3>
+    <ul>${e.references.map(r=>`<li>→ <a class="eid" data-id="${r.id}">${r.id}</a> ${esc(r.title)}<div style="color:var(--quiet)">${esc(r.comment)}</div></li>`).join("")||'<li class="empty" style="padding:4px 0">none</li>'}</ul>
+    <h3>Referenced by (${e.referenced_by.length})</h3>
+    <ul>${e.referenced_by.map(r=>`<li>← <a class="eid" data-id="${r.id}">${r.id}</a> ${esc(r.title)}<div style="color:var(--quiet)">${esc(r.comment)}</div></li>`).join("")||'<li class="empty" style="padding:4px 0">none</li>'}</ul>
+    <h3>Comments (${e.comments.length})</h3>
+    ${thread(e.comments)||'<div class="empty" style="padding:4px 0">none</div>'}
+  </div>`;
+}
+
+// ---------- activity feed
+function events(){
+  const ev = [];
+  for (const e of data.entries){
+    ev.push({k:"e"+e.id, t:e.created_at, who:e.author, id:e.id, tag:"added", cls:"", text:e.title});
+    for (const c of e.comments){
+      let tag="comment", cls="";
+      const m = c.text.match(/^\[(upvote|downvote)/); if (m){ tag = m[1]; cls = m[1]==="upvote"?"up":"down"; }
+      else if (c.text.startsWith("[merge]")) { tag="merge"; cls="split"; }
+      else if (c.text.startsWith("[edit")) tag="edit";
+      else if (c.text.startsWith("[unlink")) tag="unlink";
+      else if (c.reply_to) tag="reply";
+      ev.push({k:"c"+c.id+e.id, t:c.created_at, who:c.author, id:e.id, tag, cls, text:c.text.replace(/^\[[^\]]*\]\s*/,"")});
+    }
+  }
+  return ev.sort((a,b)=> a.t<b.t?1:a.t>b.t?-1:0).slice(0,150);
+}
+function renderFeed(){
+  const ev = events(); const fresh = !seenEvents.size;
+  $("#feed").innerHTML = ev.map(x=>{
+    const isNew = !fresh && !seenEvents.has(x.k);
+    return `<div class="ev ${isNew?"new":""}" data-id="${x.id}"><div class="t">${esc(x.t.slice(11,19))} · <span class="who">${esc(x.who)}</span> <span class="tag ${x.cls}">${esc(x.tag)}</span><a class="eid">${x.id}</a></div><div>${esc(x.text.length>140?x.text.slice(0,140)+"…":x.text)}</div></div>`;
+  }).join("") || '<div class="empty">No activity yet.</div>';
+  ev.forEach(x=>seenEvents.add(x.k));
+}
+
+// ---------- table & disputes
+const cols = [["id","ID"],["kind","Kind"],["status","Status"],["score","Score"],["up","▲"],["down","▼"],["refs","Refs"],["comments","Comments"],["title","Title"]];
+function val(e,k){ return k==="refs"? e.references.length+e.referenced_by.length : k==="comments"? e.comments.length : e[k]; }
+function renderTable(){
+  const rows = data.entries.filter(visible).sort((a,b)=>{ const x=val(a,sortKey), y=val(b,sortKey); return (x<y?-1:x>y?1:0)*sortDir; });
+  $("#tableView").innerHTML = `<table><thead><tr>${cols.map(([k,l])=>`<th data-k="${k}">${l}${sortKey===k?(sortDir>0?" ↑":" ↓"):""}</th>`).join("")}</tr></thead><tbody>`+
+    rows.map(e=>`<tr data-id="${e.id}" class="${e.id===sel?"sel":""}"><td><b>${e.id}</b></td><td><span class="sw" style="display:inline-block;background:${kindColor[e.kind]}"></span> ${esc(e.kind)}</td><td>${esc(e.status)}</td>`+
+      `<td class="num" style="color:${e.score>0?"var(--good)":e.score<0?"var(--bad)":"inherit"}">${e.score>0?"+":""}${e.score}</td><td class="num">${e.up}</td><td class="num">${e.down}</td><td class="num">${val(e,"refs")}</td><td class="num">${e.comments.length}</td><td>${esc(e.title)}${split(e)?' <span class="tag split">disputed</span>':""}</td></tr>`).join("")+
+    `</tbody></table>`;
+  $("#tableView").querySelectorAll("th").forEach(th=>th.onclick=()=>{ const k=th.dataset.k; sortDir = sortKey===k? -sortDir : 1; sortKey=k; renderTable(); });
+}
+function renderDisputes(){
+  const ds = data.entries.filter(e=>!e.merged_into && split(e));
+  $("#dispView").innerHTML = ds.length ? ds.map(e=>`<div class="card"><div><a class="eid" data-id="${e.id}">${e.id}</a> <b>${esc(e.title)}</b> <span class="tag split">▲ ${e.up} ▼ ${e.down}</span></div>
+     <ul style="list-style:none;padding:0;margin:8px 0">${e.votes.map(v=>`<li style="padding:3px 0"><b style="color:${v.value>0?"var(--good)":"var(--bad)"}">${v.value>0?"▲":"▼"} ${esc(v.voter)}</b>: ${fmtText(v.reason)}</li>`).join("")}</ul>
+     <div style="font-size:12px">${thread(e.comments.filter(c=>!/^\[(upvote|downvote)/.test(c.text) || c.reply_to || e.comments.some(x=>x.reply_to===c.id)))}</div></div>`).join("")
+    : `<div class="empty">No disputed entries: every voter agrees on every voted entry.</div>`;
+}
+
+// ---------- graph: simulation
+const cv = $("#cv"), ctx = cv.getContext("2d");
+let W=0, H=0, T={k:1,x:0,y:0}, dpr=1;
+function resize(){ const r = cv.getBoundingClientRect(); dpr = devicePixelRatio||1; W=r.width; H=r.height; cv.width=W*dpr; cv.height=H*dpr; }
+new ResizeObserver(resize).observe(cv);
+const rad = n => 4 + Math.sqrt(n.deg||0)*2.2;
+
+function tick(){
+  if (paused || alpha < 0.005) return;
+  const vs = [...nodes.values()].filter(n=>n.vis);
+  for (let i=0;i<vs.length;i++){ const a=vs[i];
+    for (let j=i+1;j<vs.length;j++){ const b=vs[j];
+      let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy;
+      if (d2 > 160000) continue; if (d2 < 1){ dx=Math.random()-.5; dy=Math.random()-.5; d2=1; }
+      const f = 900/d2; a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f; } }
+  for (const g of edges){ const a=nodes.get(g.s), b=nodes.get(g.t); if (!a.vis||!b.vis) continue;
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1, f=(d-70)*0.012;
+    a.vx+=dx/d*f*d*0.05; a.vy+=dy/d*f*d*0.05; b.vx-=dx/d*f*d*0.05; b.vy-=dy/d*f*d*0.05; }
+  for (const n of vs){ if (n===drag) continue; n.vx -= n.x*0.0025; n.vy -= n.y*0.0025;
+    n.vx*=0.55; n.vy*=0.55; n.x += Math.max(-20,Math.min(20,n.vx))*alpha; n.y += Math.max(-20,Math.min(20,n.vy))*alpha; }
+  alpha *= 0.992;
+}
+
+// ---------- graph: drawing
+function neighbors(id){ const s=new Set([id]); for (const g of edges){ if(g.s===id) s.add(g.t); if(g.t===id) s.add(g.s);} return s; }
+function draw(){
+  tick();
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
+  if (view!=="graph"){ requestAnimationFrame(draw); return; }
+  ctx.translate(W/2+T.x, H/2+T.y); ctx.scale(T.k,T.k);
+  const focus = sel || hover, nb = focus ? neighbors(focus) : null, now = performance.now();
+  const edgeC = css("--edge"), hiC = css("--edgeHi");
+  ctx.lineWidth = 1/T.k;
+  for (const g of edges){ const a=nodes.get(g.s), b=nodes.get(g.t); if(!a.vis||!b.vis) continue;
+    const hi = focus && (g.s===focus || g.t===focus);
+    ctx.strokeStyle = hi? hiC : edgeC; ctx.lineWidth = (hi?1.6:1)/T.k; ctx.globalAlpha = focus && !hi ? .35 : 1;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+    const dx=b.x-a.x, dy=b.y-a.y, d=Math.hypot(dx,dy)||1, r=rad(b)+2, ex=b.x-dx/d*r, ey=b.y-dy/d*r, s=(hi?6:4)/T.k;
+    ctx.fillStyle = hi? hiC : edgeC; ctx.beginPath(); ctx.moveTo(ex,ey);
+    ctx.lineTo(ex-dx/d*s-dy/d*s*.6, ey-dy/d*s+dx/d*s*.6); ctx.lineTo(ex-dx/d*s+dy/d*s*.6, ey-dy/d*s-dx/d*s*.6); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  const good=css("--good"), bad=css("--bad"), warn=css("--warn"), acc=css("--accent"), ink=css("--ink"), quiet=css("--quiet"), panel=css("--panel");
+  for (const n of nodes.values()){ if(!n.vis) continue; const e=n.e, r=rad(n);
+    ctx.globalAlpha = nb && !nb.has(n.id) ? .25 : 1;
+    if (n.flash && now-n.flash < 2500){ const p=(now-n.flash)/2500; ctx.strokeStyle=acc; ctx.globalAlpha=1-p; ctx.lineWidth=2.5/T.k;
+      ctx.beginPath(); ctx.arc(n.x,n.y,r+4+p*18,0,7); ctx.stroke(); ctx.globalAlpha = nb && !nb.has(n.id) ? .25 : 1; }
+    ctx.fillStyle = kindColor[e.kind] || quiet; ctx.beginPath(); ctx.arc(n.x,n.y,r,0,7); ctx.fill();
+    if (e.merged_into){ ctx.strokeStyle=quiet; ctx.setLineDash([2/T.k,2/T.k]); ctx.lineWidth=1.5/T.k; ctx.stroke(); ctx.setLineDash([]); }
+    else if (split(e)){ ctx.strokeStyle=warn; ctx.setLineDash([3/T.k,2/T.k]); ctx.lineWidth=2.5/T.k; ctx.beginPath(); ctx.arc(n.x,n.y,r+2.5/T.k,0,7); ctx.stroke(); ctx.setLineDash([]); }
+    else if (e.score){ ctx.strokeStyle = e.score>0?good:bad; ctx.lineWidth=2.2/T.k; ctx.beginPath(); ctx.arc(n.x,n.y,r+1.5/T.k,0,7); ctx.stroke(); }
+    if (n.id===sel){ ctx.strokeStyle=ink; ctx.lineWidth=2/T.k; ctx.beginPath(); ctx.arc(n.x,n.y,r+6/T.k,0,7); ctx.stroke(); }
+  }
+  // labels
+  const showAll = $("#labels").checked && T.k > 1.3;
+  ctx.font = `${12/T.k}px system-ui,sans-serif`; ctx.textBaseline="middle";
+  for (const n of nodes.values()){ if(!n.vis) continue;
+    const imp = n.id===sel || n.id===hover || (nb && nb.has(n.id));
+    if (!(showAll || imp)) continue;
+    const label = n.id + "  " + (n.e.title.length>48 ? n.e.title.slice(0,48)+"…" : n.e.title);
+    const x = n.x + rad(n) + 4/T.k;
+    ctx.globalAlpha = 1; ctx.lineWidth = 3/T.k; ctx.strokeStyle = panel; ctx.strokeText(label, x, n.y);
+    ctx.fillStyle = imp ? ink : quiet; ctx.fillText(label, x, n.y);
+  }
+  // relationship labels around the selected entry
+  if (sel){ ctx.font = `${10.5/T.k}px system-ui,sans-serif`; ctx.textAlign="center";
+    for (const g of edges){ if (g.s!==sel && g.t!==sel) continue; const a=nodes.get(g.s), b=nodes.get(g.t); if(!a.vis||!b.vis) continue;
+      const t = g.c.length>40 ? g.c.slice(0,40)+"…" : g.c, mx=(a.x+b.x)/2, my=(a.y+b.y)/2;
+      ctx.lineWidth=3/T.k; ctx.strokeStyle=panel; ctx.strokeText(t,mx,my); ctx.fillStyle=hiC; ctx.fillText(t,mx,my); }
+    ctx.textAlign="start"; }
+  requestAnimationFrame(draw);
+}
+
+// ---------- graph: interaction
+const toWorld = (sx,sy) => [(sx-W/2-T.x)/T.k, (sy-H/2-T.y)/T.k];
+function pick(sx,sy){ const [x,y]=toWorld(sx,sy); let best=null, bd=Infinity;
+  for (const n of nodes.values()){ if(!n.vis) continue; const d=Math.hypot(n.x-x,n.y-y); if (d < rad(n)+4/T.k && d<bd){ bd=d; best=n; } } return best; }
+let drag=null, pan=null, moved=false;
+cv.addEventListener("mousedown", ev=>{ const r=cv.getBoundingClientRect(), sx=ev.clientX-r.left, sy=ev.clientY-r.top; moved=false;
+  const n = pick(sx,sy); if (n){ drag=n; alpha=Math.max(alpha,.2);} else pan={sx:ev.clientX, sy:ev.clientY, x:T.x, y:T.y}; cv.style.cursor="grabbing"; });
+addEventListener("mousemove", ev=>{ const r=cv.getBoundingClientRect(), sx=ev.clientX-r.left, sy=ev.clientY-r.top;
+  if (drag){ const [x,y]=toWorld(sx,sy); drag.x=x; drag.y=y; drag.vx=drag.vy=0; moved=true; alpha=Math.max(alpha,.15); }
+  else if (pan){ T.x = pan.x + ev.clientX-pan.sx; T.y = pan.y + ev.clientY-pan.sy; moved=true; }
+  else if (ev.target===cv){ const n=pick(sx,sy); hover = n?n.id:null; const tip=$("#tip");
+    if (n){ tip.style.display="block"; tip.style.left=(sx+14)+"px"; tip.style.top=(sy+10)+"px";
+      tip.innerHTML = `<b>${n.id}</b> · ${esc(n.e.kind)} · ${n.e.score>0?"+":""}${n.e.score}<br>${esc(n.e.title)}`; } else tip.style.display="none"; } });
+addEventListener("mouseup", ev=>{ if (ev.target===cv && !moved){ const r=cv.getBoundingClientRect(); const n=pick(ev.clientX-r.left, ev.clientY-r.top); select(n?n.id:null); }
+  drag=null; pan=null; cv.style.cursor="grab"; });
+cv.addEventListener("wheel", ev=>{ ev.preventDefault(); const r=cv.getBoundingClientRect(), sx=ev.clientX-r.left, sy=ev.clientY-r.top;
+  const [wx,wy]=toWorld(sx,sy); T.k = Math.min(6, Math.max(0.1, T.k*Math.exp(-ev.deltaY*0.0015)));
+  T.x = sx-W/2-wx*T.k; T.y = sy-H/2-wy*T.k; }, {passive:false});
+function fit(){ const vs=[...nodes.values()].filter(n=>n.vis); if(!vs.length) return;
+  const xs=vs.map(n=>n.x), ys=vs.map(n=>n.y), x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  T.k = Math.min(3, 0.9*Math.min(W/((x1-x0)||1), H/((y1-y0)||1))); T.x = -(x0+x1)/2*T.k; T.y = -(y0+y1)/2*T.k; }
+function centerOn(n){ T.x = -n.x*T.k; T.y = -n.y*T.k; }
+$("#fit").onclick = fit;
+$("#pause").onclick = e=>{ paused=!paused; e.target.textContent = paused?"Resume layout":"Pause layout"; if(!paused) alpha=Math.max(alpha,.3); };
+addEventListener("keydown", ev=>{ if (ev.key==="Escape") select(null); });
+
+// ---------- start
+resize(); requestAnimationFrame(draw);
+if (LIVE) poll();
+else { ingest(EMBED); $("#dot").className="dot"; $("#liveTxt").textContent = "snapshot · " + EMBED.generated_at; }
+</script>
+</body>
+</html>

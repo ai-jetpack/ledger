@@ -1,0 +1,12 @@
+# data and exports stay out of the tool repository
+ledger.db
+ledger.db-wal
+ledger.db-shm
+snapshot/
+ledger.md
+ledger.html
+__pycache__/
+# working files and local session copies
+scratch/
+session-backup/
+RESUME.md
