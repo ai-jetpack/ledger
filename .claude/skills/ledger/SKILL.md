@@ -1,19 +1,38 @@
 ---
 name: ledger
-description: Work with the voted, linked ledger (entries with votes, threaded comments and annotated references). Use to add or update entries, review and vote, run an adversarial debate over a disagreement, find and merge duplicates, or visualize the ledger. Triggers on "ledger", "add an entry", "vote on", "review the ledger", "resolve the disagreement", "dedupe".
+description: Work with the voted, linked ledger (entries with votes, threaded comments and annotated references). Use to add or update entries, review and vote, run an adversarial debate over a disagreement, find and merge duplicates, propagate a change, or visualize the ledger. Triggers on "ledger", "add an entry", "vote on", "review the ledger", "resolve the disagreement", "dedupe".
 ---
 
 # Ledger
 
 A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a title, a body, a status, a vote count (every vote carries a reason), threaded comments, and references to other entries (each reference has a comment naming the relationship).
 
-## How to access it
+## Access: the API only
 
-- **Only through the API, never the database file.** No SQL, no opening `ledger.db`, no editing exports. Everything goes through `ledger_api.py`, which has two front ends:
-  1. **MCP tools** (`ledger_*`), if your session has them. Preferred: the author is fixed by the server, results are compact, and edits to other authors' entries are refused.
-  2. **Command line**, from the repository root: `python ledger.py <command> --author NAME ...` (`python ledger.py -h`). Text arguments accept `@path` to read from a file, which avoids shell quoting problems for long text.
-- Tool mapping: `queue` = `ledger_queue`, `show` = `ledger_get`, `list` = `ledger_find`, `disagreements` = `ledger_disputes`, `similar` = `ledger_similar`, `add`, `update`, `comment`, `vote`, `link`, `unlink`, `merge` have the same names.
-- To see the ledger: `python ledger_viz.py serve` and open http://127.0.0.1:8765 (live while others write).
+- **Never read or write the data directly**: no SQL, no opening `ledger.db`, no scripts that touch it, no reading or editing exports. Every read and write goes through the command line `python ledger.py <command> ...` from the repository root, which calls the API (`ledger_api.py`). `-h` lists commands, `<command> -h` their options.
+- **If the API is missing something, or a task takes more calls than it should, stop and propose an API change** to the user instead of working around it.
+- Set your name once: `LEDGER_AUTHOR=<you>` in the environment (PowerShell: `$env:LEDGER_AUTHOR='alpha'`); `--author NAME` can also appear anywhere on the line.
+- Long text: `--body @-` reads stdin (pipe it in: no temporary files, no quoting problems), `--body @file` reads a file. Batches read a JSON array from stdin (`-`) or a file.
+- The API enforces: you can only edit your own entries, and entries recording a user decision cannot be edited by agents (comment instead).
+- To see the ledger: `python ledger_viz.py serve`, then http://127.0.0.1:8765 (live while others write).
+
+| Need | Command |
+| --- | --- |
+| Your review work, in full | `review` (`--comments N`, default 2) |
+| Just the ids to review | `queue` |
+| Read entries | `get IDS --comments N` |
+| Search titles, bodies, comments and vote reasons (paged) | `find "words" --limit N --offset N` (`--kind`, `--status`, `--by user`) |
+| An entry and all its neighbours | `affected IDS` or `affected --query "words"` |
+| Create one / many | `add --kind K --title T --body @- --ref ID:relationship` / `add-many -` |
+| Create or edit with one verb | `set ...` (no `--id`: create; `--id ID --reason R`: update) |
+| Edit your entry | `update ID --reason R [--title --body --kind --status]` |
+| Vote one / many | `vote ID up\|down --reason R` / `vote-many -` |
+| Comment, link, unlink, merge | `comment ID --text @- [--reply-to N]`, `link FROM TO --comment C`, `unlink FROM TO --reason R`, `merge FROM INTO --reason R` |
+| Split votes / candidate duplicates | `disagreements` / `similar [--ids IDS]` |
+
+Batch formats:
+- add-many: `[{"kind": "...", "title": "...", "body": "...", "status": "proposed", "refs": [{"id": "L-0012", "comment": "implements"}, {"id": "$0", "comment": "part of"}]}]`. A reference id `$k` points at the k-th item of the same batch. All or nothing.
+- vote-many: `[{"id": "L-0012", "value": "up", "reason": "..."}]`. All or nothing.
 
 ## Writing entries
 
@@ -21,9 +40,9 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 - Title: specific and unique, at most about 80 characters. Body: the specifics, with numbers, units and sources, and why it matters.
 - Kinds: `requirement hardware model estimate measurement component policy technique kernel interface decision open-question non-goal milestone paper finding risk`. Statuses: `proposed accepted open deferred rejected`. Things decided are `accepted`, questions are `open`, ruled-out ideas are `rejected` (kept, not deleted, so the reasoning stays visible).
 - **Every entry references at least one other entry**, and the reference comment names the relationship precisely: "implements", "depends on", "constrained by", "justified by", "measures the input of", "alternative to", "part of", "decided by". A bare "related" is not acceptable.
-- **Search before adding** (`ledger_find` with a few words) so you do not create a duplicate.
+- Search before adding (`find` with a few words). `add` and `add-many` also report possible duplicates of what they just created: check each one, and if it is a real duplicate, say so (see DUPLICATES).
 - Edit only your own entries (`update` needs a reason and is logged as a comment). Comment on anyone else's.
-- Entries authored or edited by `user` record the user's decisions and are authoritative: you cannot edit them, and you never vote one down for the decision itself, only for recording it wrongly or getting a consequence wrong. List them with `ledger_find` and `author=user`.
+- Entries authored or edited by `user` record the user's decisions and are authoritative: you cannot edit them, and you never vote one down for the decision itself, only for recording it wrongly or getting a consequence wrong. List them with `find --by user`.
 
 ## Voting
 
@@ -32,16 +51,16 @@ Vote up or down on every entry you review, with a reason that names the specific
 - **Down:** wrong or unsupported figure, contradiction with another entry, too vague, not atomic, wrong kind or status, wrong or missing links, or a duplicate (start the reason with `[duplicate of L-XXXX]`).
 - One vote per voter per entry; voting again replaces the old one.
 
-## Procedures
+## Procedures (fewest calls)
 
-**REVIEW** (work through what changed)
-1. `ledger_queue` lists entries you have not voted on or that changed after your vote.
-2. For each, `ledger_get` it (the last 2 comments are usually enough) and vote.
-3. Done when the queue is empty.
+**REVIEW**: one read, one write.
+1. `review` returns every entry you have not voted on or that changed since your vote, in full (last 2 comments each).
+2. Judge them all, then send every vote in one `vote-many`.
+3. Done when `review` says nothing to review.
 
 **DEBATE** (two voters disagree)
-1. `ledger_disputes` lists split entries with each vote and the comment id to reply to.
-2. `ledger_get` the entry with all comments, then reply in its thread (`reply_to` = the other side's vote comment). Engage their specific argument with evidence. Do not concede to be agreeable, and do not defend an error once the evidence is against you.
+1. `disagreements` lists split entries with each vote and the comment id to reply to.
+2. `get` the entry with all comments, then reply in its thread (`comment ID --reply-to N`, N = the other side's vote comment). Engage their specific argument with evidence. Do not concede to be agreeable, and do not defend an error once the evidence is against you.
 3. End the reply with exactly one line:
    - `STANCE: HOLD`: you still disagree; say what evidence would change your mind.
    - `STANCE: CONCEDE`: then re-vote to match.
@@ -49,18 +68,20 @@ Vote up or down on every entry you review, with a reason that names the specific
 4. Repeat until no entry is disputed.
 
 **DUPLICATES**
-1. `ledger_similar` (optionally limited to new ids) lists candidate pairs by word overlap. Judge by meaning: two entries are duplicates only if they record the same element. A fact and the policy built on it, or evidence and the decision it supports, are distinct if linked.
+1. `similar` (optionally limited to new ids) lists candidate pairs by word overlap. Judge by meaning: two entries are duplicates only if they record the same element. A fact and the policy built on it, or evidence and the decision it supports, are distinct if linked.
 2. Post `[dup-check L-XXXX/L-YYYY] DISTINCT|DUPLICATE: reason` as a comment on the lower id; link distinct pairs that are not yet linked.
-3. Merge only after all reviewers agree, naming the surviving entry: `ledger_merge from into reason`. Merging moves comments and references and redirects links.
+3. Merge only after all reviewers agree, naming the surviving entry: `merge FROM INTO --reason ...`. Merging moves comments and references and redirects links.
 
 **PROPAGATE** (a decision or fact changed)
-1. `ledger_find` the entries it affects.
+1. `affected` with the changed entry's id (or a query) returns it with every linked entry, its status and author: one read.
 2. Update yours (reason cites the change); comment on others'.
 3. Run REVIEW so votes match the new text.
 
 **FILL** (turn a body of material into entries)
-Add entries with their references, cross-link entries that belong together, then REVIEW.
+1. `find` once or twice for what already exists.
+2. Send all new entries in one `add-many`, cross-linking them with `$k` references.
+3. Check the reported possible duplicates, then REVIEW.
 
 ## Keeping usage small
 
-Fetch only the entries you need; never read the whole ledger. Use `ledger_queue` and `ledger_disputes` as your work lists. Prefer `comments=2` when reading an entry unless you are in a debate.
+Use `review`, `disagreements` and `affected` as your work lists; never read the whole ledger. Batch writes with `add-many` and `vote-many`. Read entries with few comments unless you are in a debate. Page long searches with `--limit` and `--offset`.

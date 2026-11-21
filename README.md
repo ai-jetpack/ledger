@@ -9,7 +9,6 @@ The graph provides the necessary context for a given issue and allows mapping th
 | --- | --- |
 | `ledger_api.py` | The ledger API: the only code that touches the database. Every client below goes through it. |
 | `ledger.py` | Command line over the API |
-| `ledger_mcp.py` | MCP server over the API for agents (`--author NAME`; the author is fixed per server, no delete or edit-others operations) |
 | `ledger_viz.py`, `viewer.html` | Visualization: live force-directed graph, sortable table, disputes view, activity feed; refreshes about once a second while the ledger changes |
 
 ## Quick start
@@ -22,11 +21,13 @@ python ledger.py list
 python ledger_viz.py serve            # http://127.0.0.1:8765
 ```
 
-Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file. The first entry has nothing to reference yet; later entries through the MCP server must carry at least one reference.
+Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file. The first entry has nothing to reference yet; every later entry should reference at least one other.
 
 ## Commands
 
-`add`, `update`, `show`, `list`, `dump`, `comment`, `vote`, `link`, `unlink`, `merge`, `similar` (candidate duplicates), `disagreements` (split votes), `queue VOTER` (entries a voter has not voted on or that changed since their vote), `check`, `export` (Markdown), `backup` (consistent copy of the database). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`) are limited to the authors `main` and `user`.
+`add` (reports possible duplicates), `add-many` (JSON batch, all or nothing), `set` (create or update), `update`, `get`/`show`, `find`/`list` (searches comments and vote reasons too; `--limit`/`--offset` paging), `dump`, `comment`, `vote`, `vote-many` (JSON batch), `link`, `unlink`, `merge`, `similar` (candidate duplicates), `disagreements` (split votes), `queue VOTER` (ids a voter has not voted on or that changed since their vote), `review VOTER` (the same entries in full), `affected` (entries with their linked neighbours), `check`, `export` (Markdown), `backup` (consistent copy of the database).
+
+`--author` can appear anywhere and defaults to `LEDGER_AUTHOR`. Text arguments accept `@file` or `@-` (stdin); batch commands read JSON from a file or `-` (stdin). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`) are limited to the authors `main` and `user`.
 
 ## Rules the tool enforces
 
@@ -34,6 +35,7 @@ Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file.
 - Changes to an entry are logged as comments with the reason.
 - A reference needs a comment describing the relationship; entries cannot reference themselves.
 - Merging moves comments and references to the surviving entry and redirects links.
+- Only an entry's author may edit it; entries that record a decision by `user` (authored or edited by `user`) can only be edited by `user` or `main`. Others comment instead.
 
 ## Skill
 
@@ -45,8 +47,4 @@ MIT, see `LICENSE`.
 
 ## Agents
 
-`python ledger_mcp.py --author alpha` serves the API over MCP (stdio). Example `.mcp.json` entry:
-
-```json
-{ "mcpServers": { "ledger-alpha": { "command": "python", "args": ["ledger_mcp.py", "--author", "alpha"] } } }
-```
+Agents use the ledger through the skill and the command line only; no server is needed, so nothing is added to an agent's context until it loads the skill. Give each agent its own name with `LEDGER_AUTHOR`, and tell it to load the `ledger` skill.

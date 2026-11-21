@@ -182,7 +182,9 @@ def get(con, ids, comments="all"):
     return [entry_dict(con, _entry(con, parse_id(i), active=False), comments=comments) for i in ids]
 
 
-def find(con, query=None, kind=None, status=None, include_merged=False, limit=None, author=None):
+def find(con, query=None, kind=None, status=None, include_merged=False, limit=None, author=None, offset=0, deep=True):
+    """Filter entries. query: words that must all appear in id, title, body and (deep=True) comments and vote reasons.
+    Paging: offset + limit."""
     q, p = "SELECT * FROM entries WHERE 1=1", []
     if not include_merged: q += " AND merged_into IS NULL"
     if author: q += " AND (author=? OR id IN (SELECT entry_id FROM comments WHERE author=? AND text LIKE '[edit%'))"; p += [author, author]
@@ -191,9 +193,40 @@ def find(con, query=None, kind=None, status=None, include_merged=False, limit=No
     rows = con.execute(q + " ORDER BY id", p).fetchall()
     if query:
         words = [w.lower() for w in query.split()]
-        rows = [r for r in rows if all(w in (fmt_id(r["id"]) + " " + r["title"] + " " + r["body"]).lower() for w in words)]
-    out = [entry_dict(con, r, full=False) for r in rows]
-    return out[:limit] if limit else out
+        extra = {}
+        if deep:
+            for eid, t in con.execute("SELECT entry_id, group_concat(text, ' ') FROM comments GROUP BY entry_id"):
+                extra[eid] = t or ""
+            for eid, t in con.execute("SELECT entry_id, group_concat(reason, ' ') FROM votes GROUP BY entry_id"):
+                extra[eid] = extra.get(eid, "") + " " + (t or "")
+        rows = [r for r in rows if all(w in (fmt_id(r["id"]) + " " + r["title"] + " " + r["body"] + " " +
+                                             extra.get(r["id"], "")).lower() for w in words)]
+    rows = rows[offset:offset + limit] if limit else rows[offset:]
+    return [entry_dict(con, r, full=False) for r in rows]
+
+
+def review(con, voter, comments=2):
+    """The voter's whole review queue in one call: every entry to (re)vote on, in full."""
+    rows = con.execute(
+        "SELECT e.* FROM entries e LEFT JOIN votes v ON v.entry_id=e.id AND v.voter=? "
+        "WHERE e.merged_into IS NULL AND (v.voter IS NULL OR v.created_at < e.updated_at) ORDER BY e.id", (voter,)).fetchall()
+    return [entry_dict(con, r, comments=comments) for r in rows]
+
+
+def affected(con, ids=None, query=None):
+    """Entries named (or matching a query) with their linked neighbours, for propagating a change in one read."""
+    targets = [parse_id(i) for i in ids] if ids else [parse_id(d["id"]) for d in find(con, query)] if query else []
+    out = []
+    for eid in targets:
+        d = entry_dict(con, _entry(con, eid, active=False), full=False)
+        d["neighbours"] = [dict(dir="->", id=fmt_id(r["to_id"]), title=r["title"], status=r["status"], author=r["author"], comment=r["comment"])
+                           for r in con.execute("SELECT r.to_id, r.comment, e.title, e.status, e.author FROM refs r JOIN entries e "
+                                                "ON e.id=r.to_id WHERE r.from_id=? ORDER BY r.to_id", (eid,))]
+        d["neighbours"] += [dict(dir="<-", id=fmt_id(r["from_id"]), title=r["title"], status=r["status"], author=r["author"], comment=r["comment"])
+                            for r in con.execute("SELECT r.from_id, r.comment, e.title, e.status, e.author FROM refs r JOIN entries e "
+                                                 "ON e.id=r.from_id WHERE r.to_id=? ORDER BY r.from_id", (eid,))]
+        out.append(d)
+    return out
 
 
 def dump(con, comments="all"):
@@ -262,18 +295,48 @@ def check(con, voters=()):
 
 
 # ------------------------------------------------------------------ writes
-def add(con, author, kind, title, body="", status="proposed", refs=()):
-    """refs: iterable of (id, comment)."""
-    _check(kind, status)
+def _insert(con, author, kind, title, body, status, refs, batch_ids=()):
+    """Insert one entry inside an open transaction. A ref id "$k" points at the k-th entry of the same batch."""
+    _check(kind, status or "proposed")
     if not clean(title):
         raise LedgerError("title is required")
+    t = now()
+    eid = con.execute("INSERT INTO entries(kind,title,body,status,author,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
+                      (kind, clean(title), clean(body), status or "proposed", author, t, t)).lastrowid
+    for to, c in refs:
+        if str(to).startswith("$"):
+            k = int(str(to)[1:])
+            if k >= len(batch_ids):
+                raise LedgerError(f"reference {to} points at a batch entry that is not created yet")
+            to = batch_ids[k]
+        _link(con, eid, parse_id(to), c, author)
+    return eid
+
+
+def add(con, author, kind, title, body="", status="proposed", refs=()):
+    """refs: iterable of (id, comment). Returns the new id."""
     with tx(con):
-        t = now()
-        eid = con.execute("INSERT INTO entries(kind,title,body,status,author,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
-                          (kind, clean(title), clean(body), status, author, t, t)).lastrowid
-        for to, c in refs:
-            _link(con, eid, parse_id(to), c, author)
+        eid = _insert(con, author, kind, title, body, status, refs)
     return fmt_id(eid)
+
+
+def add_many(con, author, items):
+    """Create several entries in one transaction (all or nothing).
+    items: [{kind, title, body?, status?, refs: [{id, comment}]}]; a ref id "$k" means the k-th item of this batch."""
+    ids = []
+    with tx(con):
+        for n, it in enumerate(items):
+            try:
+                refs = [(r["id"], r["comment"]) for r in it.get("refs", [])]
+                ids.append(_insert(con, author, it.get("kind"), it.get("title"), it.get("body", ""), it.get("status"), refs, ids))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"item {n} ({it.get('title', '?')}): {e}")
+    return [fmt_id(i) for i in ids]
+
+
+def duplicates_of(con, ids, threshold=0.4):
+    """Near-duplicate candidates of the given entries (same word-overlap test as similar)."""
+    return similar(con, threshold, ids)
 
 
 def update(con, author, eid, reason, title=None, body=None, kind=None, status=None):
@@ -285,7 +348,13 @@ def update(con, author, eid, reason, title=None, body=None, kind=None, status=No
     if not clean(reason):
         raise LedgerError("a reason is required")
     with tx(con):
-        _entry(con, eid)
+        row = _entry(con, eid)
+        if author not in ADMINS:
+            if row["author"] != author:
+                raise LedgerError(f"{fmt_id(eid)} belongs to {row['author']}; comment on it instead")
+            if con.execute("SELECT 1 FROM comments WHERE entry_id=? AND author IN ('user','main') AND text LIKE '[edit%'",
+                           (eid,)).fetchone():
+                raise LedgerError(f"{fmt_id(eid)} records a user decision; comment on it instead of editing")
         sets = ", ".join(f"{k}=?" for k in changes) + ", updated_at=?"
         con.execute(f"UPDATE entries SET {sets} WHERE id=?", (*changes.values(), now(), eid))
         _comment(con, eid, author, f"[edit: {', '.join(changes)}] {clean(reason)}")
@@ -301,27 +370,53 @@ def comment(con, author, eid, text, reply_to=None):
         return _comment(con, eid, author, text, reply_to)
 
 
-def vote(con, author, eid, value, reason, reply_to=None):
+def _vote(con, author, eid, value, reason, reply_to=None):
     eid = parse_id(eid)
     val = {"up": 1, "down": -1, 1: 1, -1: -1}.get(value)
     if val is None:
         raise LedgerError("value must be 'up' or 'down'")
     if not clean(reason):
         raise LedgerError("a vote needs a reason")
-    with tx(con):
-        _entry(con, eid)
-        prev = con.execute("SELECT value FROM votes WHERE entry_id=? AND voter=?", (eid, author)).fetchone()
-        con.execute("INSERT INTO votes(entry_id,voter,value,reason,created_at) VALUES (?,?,?,?,?) "
-                    "ON CONFLICT(entry_id,voter) DO UPDATE SET value=excluded.value, reason=excluded.reason, "
-                    "created_at=excluded.created_at", (eid, author, val, clean(reason), now()))
-        tag = "upvote" if val > 0 else "downvote"
-        if prev and prev["value"] != val:
-            tag += f", changed from {'upvote' if prev['value'] > 0 else 'downvote'}"
-        elif prev:
-            tag += ", reaffirmed"
-        _comment(con, eid, author, f"[{tag}] {clean(reason)}", reply_to)
-        s, up, down = _score(con, eid)
+    _entry(con, eid)
+    prev = con.execute("SELECT value FROM votes WHERE entry_id=? AND voter=?", (eid, author)).fetchone()
+    con.execute("INSERT INTO votes(entry_id,voter,value,reason,created_at) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(entry_id,voter) DO UPDATE SET value=excluded.value, reason=excluded.reason, "
+                "created_at=excluded.created_at", (eid, author, val, clean(reason), now()))
+    tag = "upvote" if val > 0 else "downvote"
+    if prev and prev["value"] != val:
+        tag += f", changed from {'upvote' if prev['value'] > 0 else 'downvote'}"
+    elif prev:
+        tag += ", reaffirmed"
+    _comment(con, eid, author, f"[{tag}] {clean(reason)}", reply_to)
+    s, up, down = _score(con, eid)
     return {"id": fmt_id(eid), "score": s, "up": up, "down": down}
+
+
+def vote(con, author, eid, value, reason, reply_to=None):
+    with tx(con):
+        return _vote(con, author, eid, value, reason, reply_to)
+
+
+def vote_many(con, author, votes):
+    """Several votes in one transaction (all or nothing). votes: [{id, value, reason, reply_to?}]."""
+    out = []
+    with tx(con):
+        for n, v in enumerate(votes):
+            try:
+                out.append(_vote(con, author, v["id"], v["value"], v["reason"], v.get("reply_to")))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"vote {n} ({v.get('id', '?')}): {e}")
+    return out
+
+
+def set_entry(con, author, eid=None, reason=None, kind=None, title=None, body=None, status=None, refs=()):
+    """Create (no id) or update (id given; reason required) in one verb."""
+    if eid is None:
+        return add(con, author, kind, title, body or "", status or "proposed", refs)
+    out = update(con, author, eid, reason, title, body, kind, status)
+    for to, c in refs:
+        link(con, author, eid, to, c)
+    return out
 
 
 def link(con, author, frm, to, comment_text):
