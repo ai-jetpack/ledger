@@ -13,7 +13,7 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 - **If the API is missing something, or a task takes more calls than it should, stop and propose an API change** to the user instead of working around it.
 - Set your name once: `LEDGER_AUTHOR=<you>` in the environment (PowerShell: `$env:LEDGER_AUTHOR='alpha'`); `--author NAME` can also appear anywhere on the line.
 - Long text: `--body @-` reads stdin (pipe it in: no temporary files, no quoting problems), `--body @file` reads a file. Batches read a JSON array from stdin (`-`) or a file.
-- The API enforces: you can only edit your own entries, and entries recording a user decision cannot be edited by agents (comment instead).
+- The API enforces: you can edit your own entries and entries that record a user decision; comment on everyone else's.
 - To see the ledger: `python ledger_viz.py serve`, then http://127.0.0.1:8765 (live while others write).
 
 | Need | Command |
@@ -21,11 +21,11 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 | Your review work, in full | `review` (`--comments N`, default 2) |
 | Just the ids to review | `queue` |
 | Read entries | `get IDS --comments N` |
-| Search titles, bodies, comments and vote reasons (paged) | `find "words" --limit N --offset N` (`--kind`, `--status`, `--by user`) |
+| Search titles, bodies, comments and vote reasons (paged) | `find "words" --limit N --offset N` (`--kind`, `--status`, `--by alpha`) |
 | An entry and all its neighbours | `affected IDS` or `affected --query "words"` |
 | Create one / many | `add --kind K --title T --body @- --ref ID:relationship` / `add-many -` |
 | Create or edit with one verb | `set ...` (no `--id`: create; `--id ID --reason R`: update) |
-| Edit your entry | `update ID --reason R [--title --body --kind --status]` |
+| Edit your entry, or a user-decision entry | `update ID --reason R [--title --body --kind --status]` |
 | Vote one / many | `vote ID up\|down --reason R` / `vote-many -` |
 | Comment, link, unlink, merge | `comment ID --text @- [--reply-to N]`, `link FROM TO --comment C`, `unlink FROM TO --reason R`, `merge FROM INTO --reason R` |
 | Split votes / candidate duplicates | `disagreements` / `similar [--ids IDS]` |
@@ -41,12 +41,12 @@ Batch formats:
 - Kinds: `requirement hardware model estimate measurement component policy technique kernel interface decision open-question non-goal milestone paper finding risk`. Statuses: `proposed accepted open deferred rejected`. Things decided are `accepted`, questions are `open`, ruled-out ideas are `rejected` (kept, not deleted, so the reasoning stays visible).
 - **Every entry references at least one other entry**, and the reference comment names the relationship precisely: "implements", "depends on", "constrained by", "justified by", "measures the input of", "alternative to", "part of", "decided by". A bare "related" is not acceptable.
 - Search before adding (`find` with a few words). `add` and `add-many` also report possible duplicates of what they just created: check each one, and if it is a real duplicate, say so (see DUPLICATES).
-- Edit only your own entries (`update` needs a reason and is logged as a comment). Comment on anyone else's.
-- Entries authored or edited by `user` record the user's decisions and are authoritative: you cannot edit them, and you never vote one down for the decision itself, only for recording it wrongly or getting a consequence wrong. List them with `find --by user`.
+- Edit your own entries (`update` needs a reason and is logged as a comment). Comment on anyone else's.
+- The user never writes in the ledger; `main` records the user's decisions, and their body is marked `(user`, for example "Decision (user, 2026-11-21): ...". They are authoritative: never vote one down for the decision itself, only for recording it wrongly or getting a consequence wrong. When you see such an issue, fix it yourself with `update` (the reason names the issue); keep the decision as the user stated it. List them with `find "(user"`.
 
 ## Voting
 
-Vote up or down on every entry you review, with a reason that names the specific figure, entry or link at issue ("looks good" is not a reason).
+Vote up or down on every entry you review, with a reason that names the specific figure, entry or link at issue ("looks good" is not a reason). Each reason is written for its entry: one shared or template reason across many entries is not acceptable.
 - **Up:** correct, specific, atomic, right kind and status, links accurate.
 - **Down:** wrong or unsupported figure, contradiction with another entry, too vague, not atomic, wrong kind or status, wrong or missing links, or a duplicate (start the reason with `[duplicate of L-XXXX]`).
 - One vote per voter per entry; voting again replaces the old one.

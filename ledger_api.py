@@ -14,7 +14,13 @@ DEFAULT_DB = os.environ.get("LEDGER_DB", os.path.join(HERE, "ledger.db"))
 KINDS = ["requirement", "hardware", "model", "estimate", "measurement", "component", "policy", "technique",
          "kernel", "interface", "decision", "open-question", "non-goal", "milestone", "paper", "finding", "risk"]
 STATUSES = ["proposed", "accepted", "open", "deferred", "rejected"]
-ADMINS = {"main", "user"}   # only these authors may delete entries or edit/delete comments
+ADMINS = {"main"}   # only this author may delete entries, edit/delete comments or reassign authorship
+USER_DECISION = re.compile(r"\(user\b")   # body marker of an entry that records a user decision, e.g. "Decision (user, 2026-11-21): ..."
+
+
+def records_user_decision(row):
+    """True if the entry records a decision the user stated. Any author may edit such an entry when they see an issue."""
+    return bool(USER_DECISION.search(row["body"] or ""))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS entries (
@@ -349,12 +355,8 @@ def update(con, author, eid, reason, title=None, body=None, kind=None, status=No
         raise LedgerError("a reason is required")
     with tx(con):
         row = _entry(con, eid)
-        if author not in ADMINS:
-            if row["author"] != author:
-                raise LedgerError(f"{fmt_id(eid)} belongs to {row['author']}; comment on it instead")
-            if con.execute("SELECT 1 FROM comments WHERE entry_id=? AND author IN ('user','main') AND text LIKE '[edit%'",
-                           (eid,)).fetchone():
-                raise LedgerError(f"{fmt_id(eid)} records a user decision; comment on it instead of editing")
+        if author not in ADMINS and row["author"] != author and not records_user_decision(row):
+            raise LedgerError(f"{fmt_id(eid)} belongs to {row['author']}; comment on it instead")
         sets = ", ".join(f"{k}=?" for k in changes) + ", updated_at=?"
         con.execute(f"UPDATE entries SET {sets} WHERE id=?", (*changes.values(), now(), eid))
         _comment(con, eid, author, f"[edit: {', '.join(changes)}] {clean(reason)}")
@@ -461,7 +463,26 @@ def merge(con, author, frm, into, reason):
     return f"{fmt_id(src)} merged into {fmt_id(dst)}"
 
 
-# ------------------------------------------------------------------ admin (main/user only)
+# ------------------------------------------------------------------ admin (main only)
+def reassign_author(con, author, old, new, reason):
+    """Move authorship of entries, comments and references from `old` to `new`. Logged on each entry `old` authored."""
+    _admin(author)
+    old, new = clean(old), clean(new)
+    if not old or not new or old == new:
+        raise LedgerError("give two different author names")
+    if not clean(reason):
+        raise LedgerError("a reason is required")
+    with tx(con):
+        owned = [r[0] for r in con.execute("SELECT id FROM entries WHERE author=?", (old,))]
+        n_e = con.execute("UPDATE entries SET author=? WHERE author=?", (new, old)).rowcount
+        n_c = con.execute("UPDATE comments SET author=? WHERE author=?", (new, old)).rowcount
+        n_r = con.execute("UPDATE refs SET author=? WHERE author=?", (new, old)).rowcount
+        for eid in owned:
+            _comment(con, eid, author, f"[author: {old} -> {new}] {clean(reason)}")
+    return f"reassigned {old} -> {new}: {n_e} entries, {n_c} comments, {n_r} references"
+
+
+
 def delete_entry(con, author, eid, reason):
     """Remove an entry completely, with its links, votes and comments. Logged on each entry that linked to it."""
     _admin(author)
