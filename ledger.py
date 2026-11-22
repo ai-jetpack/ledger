@@ -141,6 +141,8 @@ def build_parser():
     s = cmd("edit-comment", "admin"); s.add_argument("comment_id", type=int); s.add_argument("--text", required=True); s.add_argument("--reason", required=True)
     s = cmd("delete-comment", "admin"); s.add_argument("comment_id", type=int); s.add_argument("--reason", required=True)
     s = cmd("edit-vote-reason", "admin"); s.add_argument("id"); s.add_argument("voter"); s.add_argument("--reason", required=True); s.add_argument("--why", required=True)
+    s = cmd("reassign-author", "admin: move entries, comments and references from one author to another")
+    s.add_argument("--from", dest="old", required=True); s.add_argument("--to", dest="new", required=True); s.add_argument("--reason", required=True)
     return p
 
 
@@ -231,6 +233,8 @@ def main():
             out = A.delete_comment(con, author, a.comment_id, text(a.reason))
         elif c == "edit-vote-reason":
             out = A.edit_vote_reason(con, author, a.id, a.voter, text(a.reason), text(a.why))
+        elif c == "reassign-author":
+            out = A.reassign_author(con, author, a.old, a.new, text(a.reason))
     except (A.LedgerError, json.JSONDecodeError, OSError) as e:
         print(f"error: {e}", file=sys.stderr)
         sys.exit(2)
