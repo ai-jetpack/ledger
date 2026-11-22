@@ -38,7 +38,7 @@ Batch formats:
 
 - **One atomic element per entry** (a requirement, a component, a measurement, a decision, an open question...). Two things that can be accepted or rejected separately are two entries.
 - Title: specific and unique, at most about 80 characters. Body: the specifics, with numbers, units and sources, and why it matters.
-- Kinds: `requirement hardware model estimate measurement component policy technique kernel interface decision open-question non-goal milestone paper finding risk`. Statuses: `proposed accepted open deferred rejected`. Things decided are `accepted`, questions are `open`, ruled-out ideas are `rejected` (kept, not deleted, so the reasoning stays visible).
+- Kinds: `requirement hardware model estimate measurement component policy technique kernel interface decision open-question non-goal milestone paper finding risk assumption gap`. `gap` = something not defined yet, `assumption` = an interpretation to confirm; both, with open `open-question`s, appear in the component map's side bar. Statuses: `proposed accepted open deferred rejected`. Things decided are `accepted`, questions are `open`, ruled-out ideas are `rejected` (kept, not deleted, so the reasoning stays visible).
 - **Every entry references at least one other entry**, and the reference comment names the relationship precisely: "implements", "depends on", "constrained by", "justified by", "measures the input of", "alternative to", "part of", "decided by". A bare "related" is not acceptable.
 - Search before adding (`find` with a few words). `add` and `add-many` also report possible duplicates of what they just created: check each one, and if it is a real duplicate, say so (see DUPLICATES).
 - Edit your own entries (`update` needs a reason and is logged as a comment). Comment on anyone else's.
@@ -81,6 +81,15 @@ Vote up or down on every entry you review, with a reason that names the specific
 1. `find` once or twice for what already exists.
 2. Send all new entries in one `add-many`, cross-linking them with `$k` references.
 3. Check the reported possible duplicates, then REVIEW.
+
+## Component map
+
+The component map is generated from the ledger (viewer: http://127.0.0.1:8765/components; model: `map`). Never draw or edit a map separately: change the ledger and the map follows.
+- **Box** = an entry with component attributes: `component ID --key K --name "Display name" --group req|eng|mem|sys [--types "MoeFoo · \"moefoo\""] [--docs '[["title","url"]]']` (batch: `components-many -`).
+- **Row** = a member of that entry: `member ID KEY --label L [--detail D] --form function|property|pad|event|info|missing [--role api|emit|subscribe|note|missing]` (batch: `members-many -`; remove: `member-rm ID KEY --reason R`, refused while a call uses it). The role orders the box: APIs first, then events emitted, then events subscribed, then notes and missing items; the default role follows the form (events default to `emit`; a handler such as `on "moe-turn-end"` is `--form event --role subscribe`). There is no order field.
+- **Call (arrow)** = a reference anchored on members: `link FROM TO --comment "what passes" --to-member KEY [--from-member KEY] [--basis ID]` (batch: `links-many -` with `from, to, comment, from_member, to_member, basis`). `--basis` is the entry that justifies the call; when it is a `gap`, the arrow is drawn as not defined yet. Plain references without members are design links and are not drawn.
+- The layout is automatic (columns by call depth); there are no coordinates in the ledger.
+- `check` also reports components without members and calls to members that do not exist.
 
 ## Keeping usage small
 
