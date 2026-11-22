@@ -18,9 +18,12 @@ KINDS = ["requirement", "hardware", "model", "estimate", "measurement", "compone
 STATUSES = ["proposed", "accepted", "open", "deferred", "rejected"]
 # Component map: an entry becomes a box when it has a component record; its members are the rows.
 GROUPS = ["req", "eng", "mem", "sys"]                                   # request path, engine, model+memory, machine+telemetry
+# layered view, top to bottom: the application; what it creates and serves through; GStreamer plugins (elements, tracer);
+# objects inside an element; memory, weights, caches, kernels, model files; the machine
+TIERS = ["app", "service", "element", "engine", "resource", "platform"]
 FORMS = ["function", "property", "pad", "event", "info", "missing"]   # what a member is
 ROLES = ["api", "emit", "subscribe", "note", "missing"]               # box order: APIs, events emitted, events subscribed, notes
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ADMINS = {"main"}   # only this author may delete entries, edit/delete comments or reassign authorship
 USER_DECISION = re.compile(r"\(user\b")   # body marker of an entry that records a user decision, e.g. "Decision (user, 2026-11-21): ..."
 
@@ -47,7 +50,7 @@ CREATE TABLE IF NOT EXISTS refs (
     PRIMARY KEY (from_id, to_id, from_member, to_member), CHECK (from_id <> to_id));
 CREATE TABLE IF NOT EXISTS components (
     entry_id INTEGER PRIMARY KEY REFERENCES entries(id), key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]');
+    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]', tier TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS members (
     entry_id INTEGER NOT NULL REFERENCES entries(id), key TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
     form TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (entry_id, key));
@@ -60,7 +63,7 @@ REFS_V2 = """CREATE TABLE refs (
     PRIMARY KEY (from_id, to_id, from_member, to_member), CHECK (from_id <> to_id))"""
 MAP_TABLES = [""" CREATE TABLE IF NOT EXISTS components (
     entry_id INTEGER PRIMARY KEY REFERENCES entries(id), key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]')""", """CREATE TABLE IF NOT EXISTS members (
+    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]', tier TEXT NOT NULL DEFAULT '')""", """CREATE TABLE IF NOT EXISTS members (
     entry_id INTEGER NOT NULL REFERENCES entries(id), key TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
     form TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (entry_id, key))"""]
 
@@ -80,6 +83,8 @@ def _migrate(con):
             con.execute("DROP TABLE refs_v1")
         for stmt in MAP_TABLES:
             con.execute(stmt)
+        if "tier" not in [r[1] for r in con.execute("PRAGMA table_info(components)")]:   # v2 -> v3
+            con.execute("ALTER TABLE components ADD COLUMN tier TEXT NOT NULL DEFAULT ''")
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.execute("COMMIT")
     except Exception:
@@ -256,7 +261,7 @@ def entry_dict(con, row, full=True, comments="all"):
         "SELECT r.*, e.title FROM refs r JOIN entries e ON e.id=r.from_id WHERE r.to_id=? ORDER BY r.from_id", (eid,))]
     c = con.execute("SELECT * FROM components WHERE entry_id=?", (eid,)).fetchone()
     if c:
-        d["component"] = dict(key=c["key"], name=c["name"], group=c["grp"], types=c["types"], docs=json.loads(c["docs"]))
+        d["component"] = dict(key=c["key"], name=c["name"], group=c["grp"], tier=c["tier"], types=c["types"], docs=json.loads(c["docs"]))
         d["members"] = _members(con, eid)
     cs = [dict(id=c["id"], author=c["author"], reply_to=c["reply_to"], text=c["text"], created_at=c["created_at"])
           for c in con.execute("SELECT * FROM comments WHERE entry_id=? ORDER BY id", (eid,))]
@@ -380,6 +385,9 @@ def check(con, voters=()):
     res["identical_titles"] = [ids for ids in titles.values() if len(ids) > 1]
     res["components_without_members"] = [fmt_id(r[0]) for r in con.execute(
         "SELECT entry_id FROM components c WHERE NOT EXISTS (SELECT 1 FROM members m WHERE m.entry_id=c.entry_id)")]
+    res["components_without_tier"] = [fmt_id(r[0]) for r in con.execute(
+        "SELECT c.entry_id FROM components c JOIN entries e ON e.id=c.entry_id "
+        "WHERE c.tier='' AND e.merged_into IS NULL AND e.status <> 'rejected'")]
     res["calls_to_missing_members"] = [f"{fmt_id(r[0])}.{r[1]} -> {fmt_id(r[2])}.{r[3]}" for r in con.execute(
         "SELECT from_id, from_member, to_id, to_member FROM refs r WHERE (to_member<>'' AND NOT EXISTS "
         "(SELECT 1 FROM members m WHERE m.entry_id=r.to_id AND m.key=r.to_member)) OR (from_member<>'' AND NOT EXISTS "
@@ -660,7 +668,7 @@ def _members(con, eid):
     return [dict(key=m["key"], label=m["label"], detail=m["detail"], form=m["form"], role=m["role"]) for m in rows]
 
 
-def _component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None):
+def _component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None, tier=None):
     row = _entry(con, eid)
     _can_edit(con, author, row)
     cur = con.execute("SELECT * FROM components WHERE entry_id=?", (eid,)).fetchone()
@@ -668,33 +676,36 @@ def _component_set(con, author, eid, key=None, name=None, group=None, types=None
              name=clean(name) if name is not None else (cur["name"] if cur else ""),
              grp=group if group is not None else (cur["grp"] if cur else ""),
              types=clean(types) if types is not None else (cur["types"] if cur else ""),
-             docs=json.dumps(docs) if docs is not None else (cur["docs"] if cur else "[]"))
+             docs=json.dumps(docs) if docs is not None else (cur["docs"] if cur else "[]"),
+             tier=tier if tier is not None else (cur["tier"] if cur else ""))
     if not v["key"] or not v["name"]:
         raise LedgerError("a component needs a key and a name")
     if v["grp"] not in GROUPS:
         raise LedgerError(f"group must be one of {', '.join(GROUPS)}")
-    con.execute("INSERT INTO components(entry_id,key,name,grp,types,docs) VALUES (?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
-                "key=excluded.key, name=excluded.name, grp=excluded.grp, types=excluded.types, docs=excluded.docs",
-                (eid, v["key"], v["name"], v["grp"], v["types"], v["docs"]))
+    if v["tier"] and v["tier"] not in TIERS:
+        raise LedgerError(f"tier must be one of {', '.join(TIERS)}")
+    con.execute("INSERT INTO components(entry_id,key,name,grp,types,docs,tier) VALUES (?,?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
+                "key=excluded.key, name=excluded.name, grp=excluded.grp, types=excluded.types, docs=excluded.docs, tier=excluded.tier",
+                (eid, v["key"], v["name"], v["grp"], v["types"], v["docs"], v["tier"]))
     _touch(con, eid)
 
 
-def component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None):
-    """Make an entry a box on the component map (or change its key, display name, group, type names, doc links)."""
+def component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None, tier=None):
+    """Make an entry a box on the component map (or change its key, display name, group, tier, type names, doc links)."""
     eid = parse_id(eid)
     with tx(con):
-        _component_set(con, author, eid, key, name, group, types, docs)
+        _component_set(con, author, eid, key, name, group, types, docs, tier)
         _comment(con, eid, author, "[component] map attributes set")
     return fmt_id(eid)
 
 
 def components_many(con, author, items):
-    """[{id, key, name, group, types?, docs?: [[title, url]]}] in one transaction."""
+    """[{id, key, name, group, tier?, types?, docs?: [[title, url]]}] in one transaction."""
     with tx(con):
         for n, it in enumerate(items):
             try:
                 _component_set(con, author, parse_id(it["id"]), it.get("key"), it.get("name"), it.get("group"),
-                               it.get("types"), it.get("docs"))
+                               it.get("types"), it.get("docs"), it.get("tier"))
             except (LedgerError, KeyError) as e:
                 raise LedgerError(f"component {n} ({it.get('id', '?')}): {e}")
     return len(items)
@@ -763,10 +774,10 @@ def map_model(con):
     """Everything the component map shows, generated from the ledger: boxes, rows in box order, calls,
     and the side bar lists (assumptions to confirm, gaps, open issues)."""
     comps = con.execute("SELECT c.*, e.title, e.status FROM components c JOIN entries e ON e.id=c.entry_id "
-                        "WHERE e.merged_into IS NULL ORDER BY c.key").fetchall()
+                        "WHERE e.merged_into IS NULL AND e.status <> 'rejected' ORDER BY c.key").fetchall()
     ids = {c["entry_id"]: c["key"] for c in comps}
     kinds = {r["id"]: r["kind"] for r in con.execute("SELECT id, kind FROM entries")}
-    nodes = [dict(key=c["key"], entry=fmt_id(c["entry_id"]), name=c["name"], group=c["grp"], types=c["types"],
+    nodes = [dict(key=c["key"], entry=fmt_id(c["entry_id"]), name=c["name"], group=c["grp"], tier=c["tier"], types=c["types"],
                   docs=json.loads(c["docs"]), title=c["title"], members=_members(con, c["entry_id"])) for c in comps]
     edges = []
     for r in con.execute("SELECT * FROM refs WHERE to_member<>'' ORDER BY rowid"):
@@ -776,7 +787,18 @@ def map_model(con):
                               gap=bool(r["basis"] and kinds.get(r["basis"]) == "gap")))
 
     def bar(q):
-        return [dict(id=fmt_id(r["id"]), title=r["title"]) for r in con.execute(q)]
+        out = []
+        for r in con.execute(q).fetchall():
+            i = r["id"]
+            linked = {ids[x[0]] for x in con.execute(
+                "SELECT to_id FROM refs WHERE from_id=? UNION SELECT from_id FROM refs WHERE to_id=? "
+                "UNION SELECT from_id FROM refs WHERE basis=? UNION SELECT to_id FROM refs WHERE basis=?", (i, i, i, i))
+                if x[0] in ids}
+            notes = [dict(id=c["id"], author=c["author"], at=c["created_at"], text=c["text"]) for c in con.execute(
+                "SELECT * FROM (SELECT id, author, created_at, text FROM comments WHERE entry_id=? AND author='user' ORDER BY id DESC LIMIT 20) "
+                "ORDER BY id", (i,))]
+            out.append(dict(id=fmt_id(i), title=r["title"], components=sorted(linked), comments=notes))
+        return out
     return dict(nodes=nodes, edges=edges,
                 assumptions=bar("SELECT id, title FROM entries WHERE kind='assumption' AND status NOT IN ('accepted','rejected') "
                                 "AND merged_into IS NULL ORDER BY id"),
