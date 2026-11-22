@@ -3,6 +3,7 @@
 Every client (CLI ledger.py, MCP server ledger_mcp.py, viewer ledger_viz.py) goes through these functions.
 Functions return plain dicts/lists and raise LedgerError on invalid input.
 """
+import json
 import os
 import re
 import sqlite3
@@ -12,8 +13,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_DB = os.environ.get("LEDGER_DB", os.path.join(HERE, "ledger.db"))
 
 KINDS = ["requirement", "hardware", "model", "estimate", "measurement", "component", "policy", "technique",
-         "kernel", "interface", "decision", "open-question", "non-goal", "milestone", "paper", "finding", "risk"]
+         "kernel", "interface", "decision", "open-question", "non-goal", "milestone", "paper", "finding", "risk",
+         "assumption", "gap"]
 STATUSES = ["proposed", "accepted", "open", "deferred", "rejected"]
+# Component map: an entry becomes a box when it has a component record; its members are the rows.
+GROUPS = ["req", "eng", "mem", "sys"]                                   # request path, engine, model+memory, machine+telemetry
+FORMS = ["function", "property", "pad", "event", "info", "missing"]   # what a member is
+ROLES = ["api", "emit", "subscribe", "note", "missing"]               # box order: APIs, events emitted, events subscribed, notes
+SCHEMA_VERSION = 2
 ADMINS = {"main"}   # only this author may delete entries, edit/delete comments or reassign authorship
 USER_DECISION = re.compile(r"\(user\b")   # body marker of an entry that records a user decision, e.g. "Decision (user, 2026-11-21): ..."
 
@@ -35,8 +42,49 @@ CREATE TABLE IF NOT EXISTS votes (
     reason TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (entry_id, voter));
 CREATE TABLE IF NOT EXISTS refs (
     from_id INTEGER NOT NULL REFERENCES entries(id), to_id INTEGER NOT NULL REFERENCES entries(id), comment TEXT NOT NULL,
-    author TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (from_id, to_id), CHECK (from_id <> to_id));
+    author TEXT NOT NULL, created_at TEXT NOT NULL, from_member TEXT NOT NULL DEFAULT '', to_member TEXT NOT NULL DEFAULT '',
+    basis INTEGER REFERENCES entries(id),
+    PRIMARY KEY (from_id, to_id, from_member, to_member), CHECK (from_id <> to_id));
+CREATE TABLE IF NOT EXISTS components (
+    entry_id INTEGER PRIMARY KEY REFERENCES entries(id), key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]');
+CREATE TABLE IF NOT EXISTS members (
+    entry_id INTEGER NOT NULL REFERENCES entries(id), key TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+    form TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (entry_id, key));
 """
+
+REFS_V2 = """CREATE TABLE refs (
+    from_id INTEGER NOT NULL REFERENCES entries(id), to_id INTEGER NOT NULL REFERENCES entries(id), comment TEXT NOT NULL,
+    author TEXT NOT NULL, created_at TEXT NOT NULL, from_member TEXT NOT NULL DEFAULT '', to_member TEXT NOT NULL DEFAULT '',
+    basis INTEGER REFERENCES entries(id),
+    PRIMARY KEY (from_id, to_id, from_member, to_member), CHECK (from_id <> to_id))"""
+MAP_TABLES = [""" CREATE TABLE IF NOT EXISTS components (
+    entry_id INTEGER PRIMARY KEY REFERENCES entries(id), key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]')""", """CREATE TABLE IF NOT EXISTS members (
+    entry_id INTEGER NOT NULL REFERENCES entries(id), key TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+    form TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (entry_id, key))"""]
+
+
+def _migrate(con):
+    """Bring an existing database to SCHEMA_VERSION (idempotent)."""
+    if con.execute("PRAGMA user_version").fetchone()[0] >= SCHEMA_VERSION:
+        return
+    cols = [r[1] for r in con.execute("PRAGMA table_info(refs)")]
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        if cols and "from_member" not in cols:
+            con.execute("ALTER TABLE refs RENAME TO refs_v1")
+            con.execute(REFS_V2)
+            con.execute("INSERT INTO refs(from_id,to_id,comment,author,created_at) "
+                        "SELECT from_id,to_id,comment,author,created_at FROM refs_v1")
+            con.execute("DROP TABLE refs_v1")
+        for stmt in MAP_TABLES:
+            con.execute(stmt)
+        con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
 
 STOP = set("""a an the and or of to in on for with by is are be as at from that this it its into than then per not no all
 each via can will must only also about more most over under so which when while does do their there these those using
@@ -71,6 +119,11 @@ def connect(path=DEFAULT_DB, readonly=False):
     if readonly:
         if not os.path.exists(path):
             raise LedgerError(f"no ledger database at {path}")
+        probe = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
+        old = probe.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION
+        probe.close()
+        if old:   # upgrade once through a writable connection, then read
+            connect(path).close()
         con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=60)
     else:
         new = not os.path.exists(path)
@@ -78,6 +131,9 @@ def connect(path=DEFAULT_DB, readonly=False):
         con.execute("PRAGMA journal_mode=WAL")
         if new:
             con.executescript(SCHEMA)
+            con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        else:
+            _migrate(con)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys=ON")
     con.execute("PRAGMA busy_timeout=60000")
@@ -136,16 +192,30 @@ def _score(con, eid):
     return r["s"], r["up"], r["down"]
 
 
-def _link(con, frm, to, comment, author):
+def _member_exists(con, eid, key):
+    return con.execute("SELECT 1 FROM members WHERE entry_id=? AND key=?", (eid, key)).fetchone() is not None
+
+
+def _link(con, frm, to, comment, author, from_member="", to_member="", basis=None):
+    """A reference; optionally anchored on members of both entries (a call on the component map)."""
     if frm == to:
         raise LedgerError("an entry cannot reference itself")
     _entry(con, frm)
     _entry(con, to)
     if not clean(comment):
         raise LedgerError("a reference needs a comment describing the relationship")
-    con.execute("INSERT INTO refs(from_id,to_id,comment,author,created_at) VALUES (?,?,?,?,?) "
-                "ON CONFLICT(from_id,to_id) DO UPDATE SET comment=excluded.comment, author=excluded.author, "
-                "created_at=excluded.created_at", (frm, to, clean(comment), author, now()))
+    from_member, to_member = clean(from_member), clean(to_member)
+    if from_member and not _member_exists(con, frm, from_member):
+        raise LedgerError(f"{fmt_id(frm)} has no member {from_member!r}")
+    if to_member and not _member_exists(con, to, to_member):
+        raise LedgerError(f"{fmt_id(to)} has no member {to_member!r}")
+    b = parse_id(basis) if basis else None
+    if b:
+        _entry(con, b, active=False)
+    con.execute("INSERT INTO refs(from_id,to_id,comment,author,created_at,from_member,to_member,basis) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(from_id,to_id,from_member,to_member) DO UPDATE SET comment=excluded.comment, author=excluded.author, "
+                "created_at=excluded.created_at, basis=excluded.basis",
+                (frm, to, clean(comment), author, now(), from_member, to_member, b))
 
 
 def _tokens(text):
@@ -173,10 +243,21 @@ def entry_dict(con, row, full=True, comments="all"):
     d["body"] = row["body"]
     d["votes"] = [dict(voter=v["voter"], value=v["value"], reason=v["reason"], at=v["created_at"])
                   for v in con.execute("SELECT * FROM votes WHERE entry_id=? ORDER BY voter", (eid,))]
-    d["references"] = [dict(id=fmt_id(r["to_id"]), title=r["title"], comment=r["comment"]) for r in con.execute(
-        "SELECT r.to_id, r.comment, e.title FROM refs r JOIN entries e ON e.id=r.to_id WHERE r.from_id=? ORDER BY r.to_id", (eid,))]
-    d["referenced_by"] = [dict(id=fmt_id(r["from_id"]), title=r["title"], comment=r["comment"]) for r in con.execute(
-        "SELECT r.from_id, r.comment, e.title FROM refs r JOIN entries e ON e.id=r.from_id WHERE r.to_id=? ORDER BY r.from_id", (eid,))]
+    def ref(r, other):
+        x = dict(id=fmt_id(r[other]), title=r["title"], comment=r["comment"])
+        if r["from_member"] or r["to_member"]:
+            x.update(from_member=r["from_member"], to_member=r["to_member"])
+        if r["basis"]:
+            x["basis"] = fmt_id(r["basis"])
+        return x
+    d["references"] = [ref(r, "to_id") for r in con.execute(
+        "SELECT r.*, e.title FROM refs r JOIN entries e ON e.id=r.to_id WHERE r.from_id=? ORDER BY r.to_id", (eid,))]
+    d["referenced_by"] = [ref(r, "from_id") for r in con.execute(
+        "SELECT r.*, e.title FROM refs r JOIN entries e ON e.id=r.from_id WHERE r.to_id=? ORDER BY r.from_id", (eid,))]
+    c = con.execute("SELECT * FROM components WHERE entry_id=?", (eid,)).fetchone()
+    if c:
+        d["component"] = dict(key=c["key"], name=c["name"], group=c["grp"], types=c["types"], docs=json.loads(c["docs"]))
+        d["members"] = _members(con, eid)
     cs = [dict(id=c["id"], author=c["author"], reply_to=c["reply_to"], text=c["text"], created_at=c["created_at"])
           for c in con.execute("SELECT * FROM comments WHERE entry_id=? ORDER BY id", (eid,))]
     d["comment_count"] = len(cs)
@@ -297,6 +378,12 @@ def check(con, voters=()):
     for r in con.execute("SELECT id, title FROM entries WHERE merged_into IS NULL"):
         titles.setdefault(r["title"].strip().lower(), []).append(fmt_id(r["id"]))
     res["identical_titles"] = [ids for ids in titles.values() if len(ids) > 1]
+    res["components_without_members"] = [fmt_id(r[0]) for r in con.execute(
+        "SELECT entry_id FROM components c WHERE NOT EXISTS (SELECT 1 FROM members m WHERE m.entry_id=c.entry_id)")]
+    res["calls_to_missing_members"] = [f"{fmt_id(r[0])}.{r[1]} -> {fmt_id(r[2])}.{r[3]}" for r in con.execute(
+        "SELECT from_id, from_member, to_id, to_member FROM refs r WHERE (to_member<>'' AND NOT EXISTS "
+        "(SELECT 1 FROM members m WHERE m.entry_id=r.to_id AND m.key=r.to_member)) OR (from_member<>'' AND NOT EXISTS "
+        "(SELECT 1 FROM members m WHERE m.entry_id=r.from_id AND m.key=r.from_member))")]
     return res
 
 
@@ -421,16 +508,34 @@ def set_entry(con, author, eid=None, reason=None, kind=None, title=None, body=No
     return out
 
 
-def link(con, author, frm, to, comment_text):
+def link(con, author, frm, to, comment_text, from_member="", to_member="", basis=None):
     with tx(con):
-        _link(con, parse_id(frm), parse_id(to), comment_text, author)
+        _link(con, parse_id(frm), parse_id(to), comment_text, author, from_member, to_member, basis)
     return f"{fmt_id(parse_id(frm))} -> {fmt_id(parse_id(to))}"
 
 
-def unlink(con, author, frm, to, reason):
-    frm, to = parse_id(frm), parse_id(to)
+def links_many(con, author, items):
+    """Several references in one transaction (all or nothing): [{from, to, comment, from_member?, to_member?, basis?}]."""
     with tx(con):
-        n = con.execute("DELETE FROM refs WHERE from_id=? AND to_id=?", (frm, to)).rowcount
+        for n, it in enumerate(items):
+            try:
+                _link(con, parse_id(it["from"]), parse_id(it["to"]), it["comment"], author,
+                      it.get("from_member", ""), it.get("to_member", ""), it.get("basis"))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"link {n} ({it.get('from', '?')} -> {it.get('to', '?')}): {e}")
+    return len(items)
+
+
+def unlink(con, author, frm, to, reason, from_member=None, to_member=None):
+    """Remove references from -> to; with members given, only that member-anchored call."""
+    frm, to = parse_id(frm), parse_id(to)
+    q, p = "DELETE FROM refs WHERE from_id=? AND to_id=?", [frm, to]
+    if from_member is not None:
+        q += " AND from_member=?"; p.append(from_member)
+    if to_member is not None:
+        q += " AND to_member=?"; p.append(to_member)
+    with tx(con):
+        n = con.execute(q, p).rowcount
         if n:
             _comment(con, frm, author, f"[unlink {fmt_id(to)}] {clean(reason)}")
     return bool(n)
@@ -448,10 +553,12 @@ def merge(con, author, frm, into, reason):
                         (dst, c["author"], f"[from {fmt_id(src)}] {c['text']}", None, c["created_at"]))
         for r in con.execute("SELECT * FROM refs WHERE from_id=?", (src,)).fetchall():
             if r["to_id"] != dst:
-                con.execute("INSERT OR IGNORE INTO refs VALUES (?,?,?,?,?)", (dst, r["to_id"], r["comment"], r["author"], r["created_at"]))
+                con.execute("INSERT OR IGNORE INTO refs(from_id,to_id,comment,author,created_at,from_member,to_member,basis) VALUES (?,?,?,?,?,?,?,?)",
+                            (dst, r["to_id"], r["comment"], r["author"], r["created_at"], r["from_member"], r["to_member"], r["basis"]))
         for r in con.execute("SELECT * FROM refs WHERE to_id=?", (src,)).fetchall():
             if r["from_id"] != dst:
-                con.execute("INSERT OR IGNORE INTO refs VALUES (?,?,?,?,?)", (r["from_id"], dst, r["comment"], r["author"], r["created_at"]))
+                con.execute("INSERT OR IGNORE INTO refs(from_id,to_id,comment,author,created_at,from_member,to_member,basis) VALUES (?,?,?,?,?,?,?,?)",
+                            (r["from_id"], dst, r["comment"], r["author"], r["created_at"], r["from_member"], r["to_member"], r["basis"]))
         con.execute("DELETE FROM refs WHERE from_id=? OR to_id=?", (src, src))
         _, up, down = _score(con, src)
         con.execute("DELETE FROM votes WHERE entry_id=?", (src,))
@@ -531,6 +638,151 @@ def edit_vote_reason(con, author, eid, voter, reason, why):
             raise LedgerError(f"{voter} has no vote on {fmt_id(eid)}")
         _comment(con, eid, author, f"[vote reason of {voter} edited] {clean(why)}")
     return f"vote reason of {voter} on {fmt_id(eid)} edited"
+
+
+# ------------------------------------------------------------------ component map
+ROLE_OF_FORM = {"function": "api", "property": "api", "pad": "api", "event": "emit", "info": "note", "missing": "missing"}
+
+
+def _can_edit(con, author, row):
+    if author not in ADMINS and row["author"] != author and not records_user_decision(row):
+        raise LedgerError(f"{fmt_id(row['id'])} belongs to {row['author']}; comment on it instead")
+
+
+def _touch(con, eid):
+    con.execute("UPDATE entries SET updated_at=? WHERE id=?", (now(), eid))
+
+
+def _members(con, eid):
+    """Members of a component in box order: APIs, events emitted, events subscribed, notes, missing; then by label."""
+    rows = con.execute("SELECT * FROM members WHERE entry_id=?", (eid,)).fetchall()
+    rows = sorted(rows, key=lambda m: (ROLES.index(m["role"]) if m["role"] in ROLES else 99, m["label"].lower()))
+    return [dict(key=m["key"], label=m["label"], detail=m["detail"], form=m["form"], role=m["role"]) for m in rows]
+
+
+def _component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None):
+    row = _entry(con, eid)
+    _can_edit(con, author, row)
+    cur = con.execute("SELECT * FROM components WHERE entry_id=?", (eid,)).fetchone()
+    v = dict(key=clean(key) if key is not None else (cur["key"] if cur else ""),
+             name=clean(name) if name is not None else (cur["name"] if cur else ""),
+             grp=group if group is not None else (cur["grp"] if cur else ""),
+             types=clean(types) if types is not None else (cur["types"] if cur else ""),
+             docs=json.dumps(docs) if docs is not None else (cur["docs"] if cur else "[]"))
+    if not v["key"] or not v["name"]:
+        raise LedgerError("a component needs a key and a name")
+    if v["grp"] not in GROUPS:
+        raise LedgerError(f"group must be one of {', '.join(GROUPS)}")
+    con.execute("INSERT INTO components(entry_id,key,name,grp,types,docs) VALUES (?,?,?,?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
+                "key=excluded.key, name=excluded.name, grp=excluded.grp, types=excluded.types, docs=excluded.docs",
+                (eid, v["key"], v["name"], v["grp"], v["types"], v["docs"]))
+    _touch(con, eid)
+
+
+def component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None):
+    """Make an entry a box on the component map (or change its key, display name, group, type names, doc links)."""
+    eid = parse_id(eid)
+    with tx(con):
+        _component_set(con, author, eid, key, name, group, types, docs)
+        _comment(con, eid, author, "[component] map attributes set")
+    return fmt_id(eid)
+
+
+def components_many(con, author, items):
+    """[{id, key, name, group, types?, docs?: [[title, url]]}] in one transaction."""
+    with tx(con):
+        for n, it in enumerate(items):
+            try:
+                _component_set(con, author, parse_id(it["id"]), it.get("key"), it.get("name"), it.get("group"),
+                               it.get("types"), it.get("docs"))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"component {n} ({it.get('id', '?')}): {e}")
+    return len(items)
+
+
+def _member_set(con, author, eid, key, label, detail="", form="function", role=None):
+    row = _entry(con, eid)
+    _can_edit(con, author, row)
+    if not con.execute("SELECT 1 FROM components WHERE entry_id=?", (eid,)).fetchone():
+        raise LedgerError(f"{fmt_id(eid)} is not a component; set its component attributes first")
+    if form not in FORMS:
+        raise LedgerError(f"form must be one of {', '.join(FORMS)}")
+    role = role or ROLE_OF_FORM[form]
+    if role not in ROLES:
+        raise LedgerError(f"role must be one of {', '.join(ROLES)}")
+    if not clean(key) or not clean(label):
+        raise LedgerError("a member needs a key and a label")
+    con.execute("INSERT INTO members(entry_id,key,label,detail,form,role) VALUES (?,?,?,?,?,?) ON CONFLICT(entry_id,key) DO UPDATE SET "
+                "label=excluded.label, detail=excluded.detail, form=excluded.form, role=excluded.role",
+                (eid, clean(key), clean(label), clean(detail), form, role))
+    _touch(con, eid)
+
+
+def member_set(con, author, eid, key, label, detail="", form="function", role=None):
+    """Add or change one row of a component box. form: function|property|pad|event|info|missing;
+    role (box order): api|emit|subscribe|note|missing, default derived from the form."""
+    eid = parse_id(eid)
+    with tx(con):
+        _member_set(con, author, eid, key, label, detail, form, role)
+        _comment(con, eid, author, f"[member {clean(key)}] set")
+    return f"{fmt_id(eid)}.{clean(key)}"
+
+
+def members_many(con, author, items):
+    """[{id, key, label, detail?, form, role?}] in one transaction; one log comment per entry."""
+    touched = {}
+    with tx(con):
+        for n, it in enumerate(items):
+            try:
+                eid = parse_id(it["id"])
+                _member_set(con, author, eid, it["key"], it["label"], it.get("detail", ""), it.get("form", "function"), it.get("role"))
+                touched.setdefault(eid, []).append(clean(it["key"]))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"member {n} ({it.get('id', '?')}.{it.get('key', '?')}): {e}")
+        for eid, keys in touched.items():
+            _comment(con, eid, author, f"[members set] {', '.join(keys)}")
+    return len(items)
+
+
+def member_remove(con, author, eid, key, reason):
+    eid, key = parse_id(eid), clean(key)
+    with tx(con):
+        _can_edit(con, author, _entry(con, eid))
+        used = con.execute("SELECT COUNT(*) FROM refs WHERE (from_id=? AND from_member=?) OR (to_id=? AND to_member=?)",
+                           (eid, key, eid, key)).fetchone()[0]
+        if used:
+            raise LedgerError(f"{fmt_id(eid)}.{key} is used by {used} call(s); unlink them first")
+        if not con.execute("DELETE FROM members WHERE entry_id=? AND key=?", (eid, key)).rowcount:
+            raise LedgerError(f"{fmt_id(eid)} has no member {key!r}")
+        _touch(con, eid)
+        _comment(con, eid, author, f"[member {key} removed] {clean(reason)}")
+    return f"removed {fmt_id(eid)}.{key}"
+
+
+def map_model(con):
+    """Everything the component map shows, generated from the ledger: boxes, rows in box order, calls,
+    and the side bar lists (assumptions to confirm, gaps, open issues)."""
+    comps = con.execute("SELECT c.*, e.title, e.status FROM components c JOIN entries e ON e.id=c.entry_id "
+                        "WHERE e.merged_into IS NULL ORDER BY c.key").fetchall()
+    ids = {c["entry_id"]: c["key"] for c in comps}
+    kinds = {r["id"]: r["kind"] for r in con.execute("SELECT id, kind FROM entries")}
+    nodes = [dict(key=c["key"], entry=fmt_id(c["entry_id"]), name=c["name"], group=c["grp"], types=c["types"],
+                  docs=json.loads(c["docs"]), title=c["title"], members=_members(con, c["entry_id"])) for c in comps]
+    edges = []
+    for r in con.execute("SELECT * FROM refs WHERE to_member<>'' ORDER BY rowid"):
+        if r["from_id"] in ids and r["to_id"] in ids:
+            edges.append(dict(source=ids[r["from_id"]], source_member=r["from_member"] or None, target=ids[r["to_id"]],
+                              target_member=r["to_member"], what=r["comment"], basis=fmt_id(r["basis"]) if r["basis"] else None,
+                              gap=bool(r["basis"] and kinds.get(r["basis"]) == "gap")))
+
+    def bar(q):
+        return [dict(id=fmt_id(r["id"]), title=r["title"]) for r in con.execute(q)]
+    return dict(nodes=nodes, edges=edges,
+                assumptions=bar("SELECT id, title FROM entries WHERE kind='assumption' AND status NOT IN ('accepted','rejected') "
+                                "AND merged_into IS NULL ORDER BY id"),
+                gaps=bar("SELECT id, title FROM entries WHERE kind='gap' AND status NOT IN ('accepted','rejected') "
+                         "AND merged_into IS NULL ORDER BY id"),
+                open=bar("SELECT id, title FROM entries WHERE kind='open-question' AND status='open' AND merged_into IS NULL ORDER BY id"))
 
 
 # ------------------------------------------------------------------ export

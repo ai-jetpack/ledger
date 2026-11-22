@@ -61,8 +61,13 @@ def main():
                     self.send(200, "application/json", json.dumps({"version": with_ro(a.db, A.version)}))
                 elif self.path.startswith("/api/ledger"):
                     self.send(200, "application/json", json.dumps(with_ro(a.db, A.snapshot)))
+                elif self.path.startswith("/api/map"):
+                    self.send(200, "application/json", json.dumps(with_ro(a.db, A.map_model)))
                 elif self.path in ("/", "/index.html"):
                     with open(TEMPLATE, encoding="utf-8") as f:
+                        self.send(200, "text/html; charset=utf-8", f.read())
+                elif self.path.startswith("/components"):
+                    with open(os.path.join(A.HERE, "components.html"), encoding="utf-8") as f:
                         self.send(200, "text/html; charset=utf-8", f.read())
                 else:
                     self.send(404, "text/plain", "not found")
