@@ -93,6 +93,7 @@ svg#c.panning{cursor:grabbing}
     <button class="btn" id="zin" type="button" aria-label="Zoom in">+</button>
     <button class="btn" id="fit" type="button">Fit</button>
     <button class="btn" id="reset" type="button">Reset layout</button>
+    <button class="btn" id="layers" type="button" title="Rows by API dependency (fewest at the bottom; events ignored), columns by flow (left to right)">By layer</button>
     <span class="sp"></span>
     <button class="btn" id="tp" type="button" aria-pressed="true">Details</button>
   </div>
@@ -122,22 +123,42 @@ function build(m){
  m.nodes.forEach(n=>{
   const docs=(n.docs||[]).map((d,i)=>{const k=n.key+':'+i;D[k]=d;return k});
   const l=n.types&&n.types.includes(n.entry)?n.types:[n.types,n.entry].filter(Boolean).join(' · ');
-  const o={id:n.key,g:n.group,t:n.name,l,rows:n.members.map(r=>[r.key,r.label,r.detail,FORM[r.form]||'k'])};
+  const o={id:n.key,g:n.group,t:n.name,l,rows:n.members.map(r=>[r.key,r.label,r.detail,FORM[r.form]||'k',r.role])};
   if(docs.length)o.docs=docs;N.push(o)});
  m.edges.forEach(x=>E.push([x.source,x.source_member,x.target,x.target_member,x.what,x.basis||'']));
  m.gaps.forEach(x=>GAPS[x.id]=x.title);m.assumptions.forEach(x=>ASSUME[x.id]=x.title);m.open.forEach(x=>OPEN[x.id]=x.title);
  autoLayout();
+}
+/* call graph: caller -> callee sets, with back edges that break cycles */
+function callGraph(apiOnly){
+ const by=Object.fromEntries(N.map(n=>[n.id,n])),out={},inn={};N.forEach(n=>{out[n.id]=new Set();inn[n.id]=new Set()});
+ const isApi=e=>{const t=by[e[2]],r=t&&t.rows.find(r=>r[0]===e[3]);return r&&r[4]==='api'&&(r[3]==='f'||r[3]==='q')};
+ E.forEach(e=>{if((!apiOnly||isApi(e))&&e[0]!==e[2]&&by[e[0]]&&by[e[2]]){out[e[0]].add(e[2]);inn[e[2]].add(e[0])}});
+ const state={},back=new Set();
+ function dfs(u){state[u]=1;for(const v of out[u]){if(state[v]===1)back.add(u+'>'+v);else if(!state[v])dfs(v)}state[u]=2}
+ N.slice().sort((x,y)=>inn[x.id].size-inn[y.id].size).forEach(n=>{if(!state[n.id])dfs(n.id)});
+ return{out,inn,back};
+}
+/* layer layout: rows by dependency = calls to API functions and properties only; events and pad links are flows, not dependencies (components that call no API at the bottom,
+   each one a row above the highest component whose API it calls); left to right in flow order (depth over all calls, pads and events) */
+function layerLayout(){
+ const D=callGraph(true),F=callGraph(false),GX=40,GY=90,lay={},rank={};N.forEach(n=>{lay[n.id]=0;rank[n.id]=0});
+ for(let k=0;k<N.length;k++){let ch=false;
+  N.forEach(n=>D.out[n.id].forEach(v=>{if(!D.back.has(n.id+'>'+v)&&lay[n.id]<lay[v]+1){lay[n.id]=lay[v]+1;ch=true}}));
+  N.forEach(n=>F.out[n.id].forEach(v=>{if(!F.back.has(n.id+'>'+v)&&rank[v]<rank[n.id]+1){rank[v]=rank[n.id]+1;ch=true}}));
+  if(!ch)break}
+ const rows=[];N.forEach(n=>{(rows[lay[n.id]]=rows[lay[n.id]]||[]).push(n)});
+ let y=20;for(let l=rows.length-1;l>=0;l--){const r=rows[l];if(!r)continue;
+  r.sort((a,b)=>rank[a.id]-rank[b.id]||a.t.localeCompare(b.t));
+  let x=20;r.forEach(n=>{n.x=x;n.y=y;x+=n.w+GX});
+  y+=Math.max(...r.map(n=>n.h))+GY}
 }
 /* automatic layout: columns by call depth (longest path, cycles broken), rows ordered by the barycentre of callers */
 function autoLayout(){
  const H0=42,R0=20,P0=8,GX=110,GY=36,by=Object.fromEntries(N.map(n=>[n.id,n]));
  N.forEach(n=>{const lens=[n.t.length*8.5,n.l.length*6.4,...n.rows.map(r=>r[1].length*6.6)];
   n.w=Math.round(Math.min(560,Math.max(190,...lens)+28));n.h=H0+n.rows.length*R0+P0});
- const out={},inn={};N.forEach(n=>{out[n.id]=new Set();inn[n.id]=new Set()});
- E.forEach(e=>{if(e[0]!==e[2]&&by[e[0]]&&by[e[2]]){out[e[0]].add(e[2]);inn[e[2]].add(e[0])}});
- const state={},back=new Set();
- function dfs(u){state[u]=1;for(const v of out[u]){if(state[v]===1)back.add(u+'>'+v);else if(!state[v])dfs(v)}state[u]=2}
- N.slice().sort((x,y)=>inn[x.id].size-inn[y.id].size).forEach(n=>{if(!state[n.id])dfs(n.id)});
+ const{out,inn,back}=callGraph();
  const rank={};N.forEach(n=>rank[n.id]=0);
  for(let k=0;k<N.length;k++){let ch=false;N.forEach(n=>out[n.id].forEach(v=>{if(!back.has(n.id+'>'+v)&&rank[v]<rank[n.id]+1){rank[v]=rank[n.id]+1;ch=true}}));if(!ch)break}
  const cols=[];N.forEach(n=>{(cols[rank[n.id]]=cols[rank[n.id]]||[]).push(n)});
@@ -228,6 +249,7 @@ svg.addEventListener('wheel',ev=>{ev.preventDefault();const[px,py]=local(ev);zoo
 document.getElementById('zin').onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.25)};
 document.getElementById('zout').onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(r.width/2,r.height/2,.8)};
 document.getElementById('fit').onclick=fit;
+document.getElementById('layers').onclick=()=>{layerLayout();N.forEach(placeNode);savePos();routeAll();fit()};
 document.getElementById('reset').onclick=()=>{N.forEach(n=>{n.x=n.x0;n.y=n.y0;placeNode(n)});try{localStorage.removeItem(KEY)}catch(e){}routeAll();fit()};
 
 /* ---------- pointer: drag boxes, pan, pinch, click ---------- */
