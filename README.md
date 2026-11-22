@@ -10,6 +10,7 @@ The graph provides the necessary context for a given issue and allows mapping th
 | `ledger_api.py` | The ledger API: the only code that touches the database. Every client below goes through it. |
 | `ledger.py` | Command line over the API |
 | `ledger_viz.py`, `viewer.html` | Visualization: live force-directed graph, sortable table, disputes view, activity feed; refreshes about once a second while the ledger changes |
+| `components.html` | Component map generated from the ledger (boxes = component entries, rows = members, arrows = member-anchored references; automatic layout; side bar with assumptions, gaps and open issues), served at `/components` |
 
 ## Quick start
 
@@ -26,6 +27,8 @@ Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file.
 ## Commands
 
 `add` (reports possible duplicates), `add-many` (JSON batch, all or nothing), `set` (create or update), `update`, `get`/`show`, `find`/`list` (searches comments and vote reasons too; `--limit`/`--offset` paging), `dump`, `comment`, `vote`, `vote-many` (JSON batch), `link`, `unlink`, `merge`, `similar` (candidate duplicates), `disagreements` (split votes), `queue VOTER` (ids a voter has not voted on or that changed since their vote), `review VOTER` (the same entries in full), `affected` (entries with their linked neighbours), `check`, `export` (Markdown), `backup` (consistent copy of the database).
+
+Component map: `component` / `components-many` (make an entry a box), `member` / `members-many` / `member-rm` (its rows: APIs, events emitted, events subscribed), `link --from-member --to-member --basis` / `links-many` (calls), `map` (the generated model as JSON).
 
 `--author` can appear anywhere and defaults to `LEDGER_AUTHOR`. Text arguments accept `@file` or `@-` (stdin); batch commands read JSON from a file or `-` (stdin). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`) are limited to the authors `main` and `user`.
 
