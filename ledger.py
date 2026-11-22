@@ -134,8 +134,9 @@ def build_parser():
     s.add_argument("--from-member"); s.add_argument("--to-member")
     s = cmd("component", "make an entry a box on the component map, or change its map attributes")
     s.add_argument("id"); s.add_argument("--key"); s.add_argument("--name"); s.add_argument("--group", help="req | eng | mem | sys")
+    s.add_argument("--tier", help="row in the layered view: " + " | ".join(A.TIERS))
     s.add_argument("--types", help="type and element names shown under the title"); s.add_argument("--docs", help='JSON: [["title","url"], ...]')
-    s = cmd("components-many", "map attributes from a JSON array: [{id,key,name,group,types?,docs?}]"); s.add_argument("src")
+    s = cmd("components-many", "map attributes from a JSON array: [{id,key,name,group,tier?,types?,docs?}]"); s.add_argument("src")
     s = cmd("member", "add or change a row of a component box")
     s.add_argument("id"); s.add_argument("key"); s.add_argument("--label", required=True); s.add_argument("--detail", default="")
     s.add_argument("--form", default="function", help="function | property | pad | event | info | missing")
@@ -215,7 +216,7 @@ def main():
         elif c == "unlink":
             out = "removed" if A.unlink(con, author, a.frm, a.to, text(a.reason), a.from_member, a.to_member) else "no such reference"
         elif c == "component":
-            out = A.component_set(con, author, a.id, a.key, a.name, a.group, a.types, json.loads(a.docs) if a.docs else None)
+            out = A.component_set(con, author, a.id, a.key, a.name, a.group, a.types, json.loads(a.docs) if a.docs else None, a.tier)
         elif c == "components-many":
             out = f"{A.components_many(con, author, load_json(a.src))} components set"
         elif c == "member":

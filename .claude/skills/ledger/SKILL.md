@@ -88,8 +88,10 @@ The component map is generated from the ledger (viewer: http://127.0.0.1:8765/co
 - **Box** = an entry with component attributes: `component ID --key K --name "Display name" --group req|eng|mem|sys [--types "MoeFoo · \"moefoo\""] [--docs '[["title","url"]]']` (batch: `components-many -`).
 - **Row** = a member of that entry: `member ID KEY --label L [--detail D] --form function|property|pad|event|info|missing [--role api|emit|subscribe|note|missing]` (batch: `members-many -`; remove: `member-rm ID KEY --reason R`, refused while a call uses it). The role orders the box: APIs first, then events emitted, then events subscribed, then notes and missing items; the default role follows the form (events default to `emit`; a handler such as `on "moe-turn-end"` is `--form event --role subscribe`). There is no order field.
 - **Call (arrow)** = a reference anchored on members: `link FROM TO --comment "what passes" --to-member KEY [--from-member KEY] [--basis ID]` (batch: `links-many -` with `from, to, comment, from_member, to_member, basis`). `--basis` is the entry that justifies the call; when it is a `gap`, the arrow is drawn as not defined yet. Plain references without members are design links and are not drawn.
-- The layout is automatic (columns by call depth); there are no coordinates in the ledger.
-- `check` also reports components without members and calls to members that do not exist.
+- **Tier** = the box's row in the layered view, top to bottom: `app` (the executable), `service` (what it creates and serves through: API server, pipeline, model manager), `element` (GStreamer plugins: elements, tracer), `engine` (objects inside an element), `resource` (memory, weights, caches, kernels, model files), `platform` (the machine). Set it with `component ID --tier T` (or `tier` in `components-many`). It is a classification, not an order.
+- The layout is automatic (columns by call depth, or rows by tier with "By layer"); there are no coordinates in the ledger.
+- The user can comment on a side-bar issue from the map; those comments have author `user`. Treat them as the user's input: main records any decision they contain.
+- `check` also reports components without members, components without a tier and calls to members that do not exist.
 
 ## Keeping usage small
 

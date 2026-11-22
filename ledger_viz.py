@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Visualize the design ledger (read-only, through ledger_api).
+"""Visualize the design ledger through ledger_api (read-only, except comments typed on the component map's issues).
 
   python ledger_viz.py serve [--port 8765]   live viewer at http://127.0.0.1:8765
   python ledger_viz.py html  [--out FILE]    self-contained snapshot (ledger.html)
@@ -54,6 +54,25 @@ def main():
             self.send_header("Content-Length", str(len(b)))
             self.end_headers()
             self.wfile.write(b)
+
+        def do_POST(self):
+            # the one write: a comment typed by the user on a side-bar issue of the component map (author "user")
+            try:
+                if self.path.startswith("/api/comment"):
+                    n = int(self.headers.get("Content-Length") or 0)
+                    req = json.loads(self.rfile.read(min(n, 65536)).decode("utf-8"))
+                    con = A.connect(a.db)
+                    try:
+                        cid = A.comment(con, "user", req["id"], str(req["text"]))
+                    finally:
+                        con.close()
+                    self.send(200, "application/json", json.dumps({"comment": cid}))
+                else:
+                    self.send(404, "text/plain", "not found")
+            except (A.LedgerError, KeyError, ValueError) as e:
+                self.send(400, "text/plain", f"{type(e).__name__}: {e}")
+            except Exception as e:
+                self.send(500, "text/plain", f"{type(e).__name__}: {e}")
 
         def do_GET(self):
             try:

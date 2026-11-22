@@ -39,6 +39,13 @@ svg#c.panning{cursor:grabbing}
 .node{cursor:move}
 .node .frame{fill:none;stroke-width:1.5}
 .node.sel .frame{stroke:var(--hi)!important;stroke-width:3}
+.node.dimn{opacity:.25}
+.list.gaps li.iss{cursor:pointer}
+.list.gaps li.iss.on{outline:2px solid var(--hi);outline-offset:2px;border-radius:4px}
+.issbox{margin-top:6px;display:grid;gap:6px}
+.issbox textarea{width:100%;min-height:64px;font:inherit;padding:6px;box-sizing:border-box;background:var(--panel);color:inherit;border:1px solid var(--line,#888);border-radius:4px}
+.issbox .note{font-size:12px;opacity:.85;white-space:pre-wrap}
+.issbox .err{color:var(--gap)}
 .node.dragging{filter:drop-shadow(0 6px 10px rgba(0,0,0,.18))}
 .nt{font:600 13px var(--sans);fill:var(--ink)}
 .nid{font:500 10.5px var(--mono);fill:var(--muted)}
@@ -93,6 +100,7 @@ svg#c.panning{cursor:grabbing}
     <button class="btn" id="zin" type="button" aria-label="Zoom in">+</button>
     <button class="btn" id="fit" type="button">Fit</button>
     <button class="btn" id="reset" type="button">Reset layout</button>
+    <button class="btn" id="layers" type="button" title="Rows by tier: application, services, GStreamer plugins, element internals, resources, machine">By layer</button>
     <span class="sp"></span>
     <button class="btn" id="tp" type="button" aria-pressed="true">Details</button>
   </div>
@@ -116,28 +124,57 @@ svg#c.panning{cursor:grabbing}
 <script>
 const G={req:['--req','--req-bg'],eng:['--eng','--eng-bg'],mem:['--mem','--mem-bg'],sys:['--sys','--sys-bg'],gap:['--gap','--gap-bg']};
 // Generated from the ledger: GET /api/map (boxes = component entries, rows = members, calls = member-anchored references).
-let D={},N=[],E=[],GAPS={},ASSUME={},OPEN={};
+let D={},N=[],E=[],GAPS={},ASSUME={},OPEN={},ISSUE={};
 const FORM={function:'f',property:'q',pad:'p',event:'s',info:'k',missing:'x'};
 function build(m){
  m.nodes.forEach(n=>{
   const docs=(n.docs||[]).map((d,i)=>{const k=n.key+':'+i;D[k]=d;return k});
   const l=n.types&&n.types.includes(n.entry)?n.types:[n.types,n.entry].filter(Boolean).join(' · ');
-  const o={id:n.key,g:n.group,t:n.name,l,rows:n.members.map(r=>[r.key,r.label,r.detail,FORM[r.form]||'k'])};
+  const o={id:n.key,g:n.group,tier:n.tier||'',t:n.name,l,rows:n.members.map(r=>[r.key,r.label,r.detail,FORM[r.form]||'k',r.role])};
   if(docs.length)o.docs=docs;N.push(o)});
  m.edges.forEach(x=>E.push([x.source,x.source_member,x.target,x.target_member,x.what,x.basis||'']));
  m.gaps.forEach(x=>GAPS[x.id]=x.title);m.assumptions.forEach(x=>ASSUME[x.id]=x.title);m.open.forEach(x=>OPEN[x.id]=x.title);
+ [...m.gaps,...m.assumptions,...m.open].forEach(x=>ISSUE[x.id]=x);
  autoLayout();
+}
+/* call graph: caller -> callee sets, with back edges that break cycles */
+function callGraph(apiOnly){
+ const by=Object.fromEntries(N.map(n=>[n.id,n])),out={},inn={};N.forEach(n=>{out[n.id]=new Set();inn[n.id]=new Set()});
+ const isApi=e=>{const t=by[e[2]],r=t&&t.rows.find(r=>r[0]===e[3]);return r&&r[4]==='api'&&(r[3]==='f'||r[3]==='q')};
+ E.forEach(e=>{if((!apiOnly||isApi(e))&&e[0]!==e[2]&&by[e[0]]&&by[e[2]]){out[e[0]].add(e[2]);inn[e[2]].add(e[0])}});
+ const state={},back=new Set();
+ function dfs(u){state[u]=1;for(const v of out[u]){if(state[v]===1)back.add(u+'>'+v);else if(!state[v])dfs(v)}state[u]=2}
+ N.slice().sort((x,y)=>inn[x.id].size-inn[y.id].size).forEach(n=>{if(!state[n.id])dfs(n.id)});
+ return{out,inn,back};
+}
+/* layer layout: one row per tier from the ledger (application, services, GStreamer plugins, objects inside an element,
+   resources, machine), top to bottom; boxes without a tier go in a last row by API dependency. Inside a row: flow order
+   (depth over all calls, pads and events), then barycentre sweeps against the neighbouring rows to cut crossings. */
+const TIERS=['app','service','element','engine','resource','platform'];
+function layerLayout(){
+ const D=callGraph(true),F=callGraph(false),GX=40,GY=90,dep={},rank={};N.forEach(n=>{dep[n.id]=0;rank[n.id]=0});
+ for(let k=0;k<N.length;k++){let ch=false;
+  N.forEach(n=>D.out[n.id].forEach(v=>{if(!D.back.has(n.id+'>'+v)&&dep[n.id]<dep[v]+1){dep[n.id]=dep[v]+1;ch=true}}));
+  N.forEach(n=>F.out[n.id].forEach(v=>{if(!F.back.has(n.id+'>'+v)&&rank[v]<rank[n.id]+1){rank[v]=rank[n.id]+1;ch=true}}));
+  if(!ch)break}
+ const byKey=Object.fromEntries(N.map(n=>[n.id,n]));
+ const row=n=>{const t=TIERS.indexOf(n.tier);return t>=0?t:TIERS.length};
+ const rows=[];N.forEach(n=>{(rows[row(n)]=rows[row(n)]||[]).push(n)});
+ const R=rows.filter(Boolean);R.forEach(r=>r.sort((a,b)=>rank[a.id]-rank[b.id]||a.t.localeCompare(b.t)));
+ const nb={};N.forEach(n=>nb[n.id]=[...F.inn[n.id],...F.out[n.id]]);
+ const pos={};const setPos=()=>R.forEach(r=>r.forEach((n,i)=>pos[n.id]=(i+.5)/r.length));setPos();
+ for(let s=0;s<8;s++){const order=s%2?R.slice().reverse():R;order.forEach(r=>{
+   r.forEach(n=>{const p=nb[n.id].filter(u=>!r.includes(byKey[u])).map(u=>pos[u]);n.bc=p.length?p.reduce((x,y)=>x+y,0)/p.length:pos[n.id]});
+   r.sort((a,b)=>a.bc-b.bc);r.forEach((n,i)=>pos[n.id]=(i+.5)/r.length)})}
+ const width=r=>r.reduce((x,n)=>x+n.w+GX,-GX),W=Math.max(...R.map(width));
+ let y=20;R.forEach(r=>{let x=20+(W-width(r))/2;r.forEach(n=>{n.x=x;n.y=y;x+=n.w+GX});y+=Math.max(...r.map(n=>n.h))+GY});
 }
 /* automatic layout: columns by call depth (longest path, cycles broken), rows ordered by the barycentre of callers */
 function autoLayout(){
  const H0=42,R0=20,P0=8,GX=110,GY=36,by=Object.fromEntries(N.map(n=>[n.id,n]));
  N.forEach(n=>{const lens=[n.t.length*8.5,n.l.length*6.4,...n.rows.map(r=>r[1].length*6.6)];
   n.w=Math.round(Math.min(560,Math.max(190,...lens)+28));n.h=H0+n.rows.length*R0+P0});
- const out={},inn={};N.forEach(n=>{out[n.id]=new Set();inn[n.id]=new Set()});
- E.forEach(e=>{if(e[0]!==e[2]&&by[e[0]]&&by[e[2]]){out[e[0]].add(e[2]);inn[e[2]].add(e[0])}});
- const state={},back=new Set();
- function dfs(u){state[u]=1;for(const v of out[u]){if(state[v]===1)back.add(u+'>'+v);else if(!state[v])dfs(v)}state[u]=2}
- N.slice().sort((x,y)=>inn[x.id].size-inn[y.id].size).forEach(n=>{if(!state[n.id])dfs(n.id)});
+ const{out,inn,back}=callGraph();
  const rank={};N.forEach(n=>rank[n.id]=0);
  for(let k=0;k<N.length;k++){let ch=false;N.forEach(n=>out[n.id].forEach(v=>{if(!back.has(n.id+'>'+v)&&rank[v]<rank[n.id]+1){rank[v]=rank[n.id]+1;ch=true}}));if(!ch)break}
  const cols=[];N.forEach(n=>{(cols[rank[n.id]]=cols[rank[n.id]]||[]).push(n)});
@@ -228,6 +265,7 @@ svg.addEventListener('wheel',ev=>{ev.preventDefault();const[px,py]=local(ev);zoo
 document.getElementById('zin').onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(r.width/2,r.height/2,1.25)};
 document.getElementById('zout').onclick=()=>{const r=svg.getBoundingClientRect();zoomAt(r.width/2,r.height/2,.8)};
 document.getElementById('fit').onclick=fit;
+document.getElementById('layers').onclick=()=>{layerLayout();N.forEach(placeNode);savePos();routeAll();fit()};
 document.getElementById('reset').onclick=()=>{N.forEach(n=>{n.x=n.x0;n.y=n.y0;placeNode(n)});try{localStorage.removeItem(KEY)}catch(e){}routeAll();fit()};
 
 /* ---------- pointer: drag boxes, pan, pinch, click ---------- */
@@ -270,7 +308,10 @@ function select(s){sel=s;
  const hotE=new Set();
  if(s&&s.node!=null)E.forEach((e,i)=>{if(e[0]===s.node||e[2]===s.node)hotE.add(i)});
  if(s&&s.edge!=null)hotE.add(s.edge);
- N.forEach(n=>n.el.classList.toggle('sel',!!s&&s.node===n.id));
+ const iss=s&&s.issue?ISSUE[s.issue]:null,hotN=new Set(iss?iss.components:[]);
+ if(iss)E.forEach((e,i)=>{if(e[5]===iss.id||(hotN.has(e[0])&&hotN.has(e[2])))hotE.add(i)});
+ N.forEach(n=>{n.el.classList.toggle('sel',!!s&&(s.node===n.id||hotN.has(n.id)));n.el.classList.toggle('dimn',!!iss&&!hotN.has(n.id))});
+ try{iss?localStorage.setItem('ledger-map-issue',iss.id):localStorage.removeItem('ledger-map-issue')}catch(e){}
  const hotR=new Set();
  E.forEach((e,i)=>{const on=hotE.has(i);e.el.g.classList.toggle('on',on);e.el.g.classList.toggle('dim',!!s&&!on);
   e.el.ln.setAttribute('marker-end',on?'url(#arh)':!!GAPS[e[5]]?'url(#arg)':'url(#ar)');
@@ -301,18 +342,28 @@ function renderPanel(){
   const head=h('div');head.append(h('h2',null,'Components, interfaces and calls'),h('p','hint','Drag a box to move it; its links follow. Drag the background to pan; scroll or pinch to zoom. Select a box or a numbered link for details. The layout is automatic; positions you drag are kept in this browser until Reset layout. The map is generated from the ledger and refreshes when the ledger changes.'));panel.append(head);
   const lg=h('div','legend');[['--req','--req-bg','Request path'],['--eng','--eng-bg','Inference engine'],['--mem','--mem-bg','Model and memory'],['--sys','--sys-bg','Machine and telemetry'],['--gap','--gap-bg','Not defined yet']].forEach(([c,b,t])=>{const s=h('span');const i=h('i','sw');i.style.background=`var(${b})`;i.style.borderColor=`var(${c})`;s.append(i,t);lg.append(s)});panel.append(lg);
  }
- const sa=h('section');sa.append(h('h3',null,'Assumptions to confirm'));const ua=h('ul','list gaps');
- Object.entries(ASSUME).forEach(([k,v])=>{const li=h('li');li.append(h('b',null,k),v);ua.append(li)});sa.append(ua);panel.append(sa);
- const sg=h('section');sg.append(h('h3',null,'Not defined yet'));const ug=h('ul','list gaps');
- Object.entries(GAPS).forEach(([k,v])=>{const li=h('li');li.append(h('b',null,k),v);ug.append(li)});sg.append(ug);panel.append(sg);
- const so=h('section');so.append(h('h3',null,'Open issues'));const uo=h('ul','list gaps');
- Object.entries(OPEN).forEach(([k,v])=>{const li=h('li');li.append(h('b',null,k),v);uo.append(li)});so.append(uo);panel.append(so);
+ [['Assumptions to confirm',ASSUME],['Not defined yet',GAPS],['Open issues',OPEN]].forEach(([t,M])=>{
+  const sec=h('section');sec.append(h('h3',null,t));const ul=h('ul','list gaps');
+  Object.keys(M).forEach(k=>ul.append(issueItem(ISSUE[k])));sec.append(ul);panel.append(sec)});
 }
+function issueItem(x){const on=!!sel&&sel.issue===x.id,li=h('li','iss'+(on?' on':''));
+ li.append(h('b',null,x.id),x.title);
+ li.onclick=ev=>{if(ev.target.closest('.issbox'))return;select(on?null:{issue:x.id})};
+ if(!on)return li;
+ const box=h('div','issbox');
+ box.append(h('div','note',x.components.length?'Components: '+x.components.map(k=>byId[k]?byId[k].t:k).join(', '):'No component on the map is linked to it yet.'));
+ x.comments.forEach(c=>box.append(h('div','note',`${c.at.slice(0,16).replace('T',' ')}  ${c.text}`)));
+ const ta=h('textarea');ta.placeholder='Your comment on '+x.id;const bt=h('button','btn','Add comment');bt.type='button';const er=h('div','err');
+ bt.onclick=()=>{const text=ta.value.trim();if(!text)return;bt.disabled=true;
+  fetch('/api/comment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:x.id,text})})
+   .then(r=>r.ok?r.json():r.text().then(t=>{throw new Error(t)})).then(()=>{ta.value=''}).catch(e=>{er.textContent=e.message;bt.disabled=false})};
+ box.append(ta,bt,er);li.append(box);setTimeout(()=>ta.focus(),0);return li}
 document.getElementById('tp').onclick=ev=>{panel.hidden=!panel.hidden;ev.currentTarget.setAttribute('aria-pressed',String(!panel.hidden));requestAnimationFrame(fit)};
 if(matchMedia('(max-width:760px)').matches){panel.hidden=true;document.getElementById('tp').setAttribute('aria-pressed','false')}
 
 /* ---------- start ---------- */
-N.forEach(placeNode);routeAll();renderPanel();
+N.forEach(placeNode);routeAll();
+try{const k=localStorage.getItem('ledger-map-issue');if(k&&ISSUE[k])select({issue:k});else renderPanel()}catch(e){renderPanel()}
 requestAnimationFrame(fit);
 new ResizeObserver(()=>{if(!view.fitted){fit();view.fitted=true}}).observe(svg);
 
