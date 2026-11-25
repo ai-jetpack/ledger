@@ -23,7 +23,7 @@ GROUPS = ["req", "eng", "mem", "sys"]                                   # reques
 TIERS = ["app", "service", "element", "engine", "resource", "platform"]
 FORMS = ["function", "property", "pad", "event", "info", "missing"]   # what a member is
 ROLES = ["api", "emit", "subscribe", "note", "missing"]               # box order: APIs, events emitted, events subscribed, notes
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ADMINS = {"main"}   # only this author may delete entries, edit/delete comments or reassign authorship
 USER_DECISION = re.compile(r"\(user\b")   # body marker of an entry that records a user decision, e.g. "Decision (user, 2026-11-21): ..."
 
@@ -50,10 +50,11 @@ CREATE TABLE IF NOT EXISTS refs (
     PRIMARY KEY (from_id, to_id, from_member, to_member), CHECK (from_id <> to_id));
 CREATE TABLE IF NOT EXISTS components (
     entry_id INTEGER PRIMARY KEY REFERENCES entries(id), key TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]', tier TEXT NOT NULL DEFAULT '');
+    grp TEXT NOT NULL, types TEXT NOT NULL DEFAULT '', docs TEXT NOT NULL DEFAULT '[]', tier TEXT NOT NULL DEFAULT '',
+    impl TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS members (
     entry_id INTEGER NOT NULL REFERENCES entries(id), key TEXT NOT NULL, label TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
-    form TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY (entry_id, key));
+    form TEXT NOT NULL, role TEXT NOT NULL, impl TEXT NOT NULL DEFAULT '', PRIMARY KEY (entry_id, key));
 """
 
 REFS_V2 = """CREATE TABLE refs (
@@ -85,6 +86,9 @@ def _migrate(con):
             con.execute(stmt)
         if "tier" not in [r[1] for r in con.execute("PRAGMA table_info(components)")]:   # v2 -> v3
             con.execute("ALTER TABLE components ADD COLUMN tier TEXT NOT NULL DEFAULT ''")
+        for table in ("components", "members"):   # v3 -> v4: where each box and row is implemented
+            if "impl" not in [r[1] for r in con.execute(f"PRAGMA table_info({table})")]:
+                con.execute(f"ALTER TABLE {table} ADD COLUMN impl TEXT NOT NULL DEFAULT ''")
         con.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         con.execute("COMMIT")
     except Exception:
@@ -665,7 +669,8 @@ def _members(con, eid):
     """Members of a component in box order: APIs, events emitted, events subscribed, notes, missing; then by label."""
     rows = con.execute("SELECT * FROM members WHERE entry_id=?", (eid,)).fetchall()
     rows = sorted(rows, key=lambda m: (ROLES.index(m["role"]) if m["role"] in ROLES else 99, m["label"].lower()))
-    return [dict(key=m["key"], label=m["label"], detail=m["detail"], form=m["form"], role=m["role"]) for m in rows]
+    return [dict(key=m["key"], label=m["label"], detail=m["detail"], form=m["form"], role=m["role"], impl=m["impl"])
+            for m in rows]
 
 
 def _component_set(con, author, eid, key=None, name=None, group=None, types=None, docs=None, tier=None):
@@ -755,6 +760,45 @@ def members_many(con, author, items):
     return len(items)
 
 
+def _implement(con, author, eid, member, where):
+    row = _entry(con, eid)
+    _can_edit(con, author, row)
+    where = clean(where)
+    if member:
+        cur = con.execute("UPDATE members SET impl=? WHERE entry_id=? AND key=?", (where, eid, clean(member)))
+    else:
+        cur = con.execute("UPDATE components SET impl=? WHERE entry_id=?", (where, eid))
+    if not cur.rowcount:
+        raise LedgerError(f"{fmt_id(eid)}{'.' + clean(member) if member else ''} is not on the component map")
+    _touch(con, eid)
+
+
+def implement(con, author, eid, member=None, where=""):
+    """Marks a component box (member=None) or one of its rows as implemented in `where` (a source path, optionally
+    with the symbol, e.g. src/calibration/moeprofile.c); an empty `where` clears the mark."""
+    eid = parse_id(eid)
+    with tx(con):
+        _implement(con, author, eid, member, where)
+        _comment(con, eid, author, f"[implemented{' ' + clean(member) if member else ''}] {clean(where) or 'cleared'}")
+    return f"{fmt_id(eid)}{'.' + clean(member) if member else ''}"
+
+
+def implement_many(con, author, items):
+    """[{id, member?, where}] in one transaction; one log comment per entry."""
+    touched = {}
+    with tx(con):
+        for n, it in enumerate(items):
+            try:
+                eid = parse_id(it["id"])
+                _implement(con, author, eid, it.get("member"), it.get("where", ""))
+                touched.setdefault(eid, []).append(clean(it.get("member") or "(box)"))
+            except (LedgerError, KeyError) as e:
+                raise LedgerError(f"implement {n} ({it.get('id', '?')}): {e}")
+        for eid, keys in touched.items():
+            _comment(con, eid, author, f"[implemented] {', '.join(keys)}")
+    return len(items)
+
+
 def member_remove(con, author, eid, key, reason):
     eid, key = parse_id(eid), clean(key)
     with tx(con):
@@ -778,7 +822,8 @@ def map_model(con):
     ids = {c["entry_id"]: c["key"] for c in comps}
     kinds = {r["id"]: r["kind"] for r in con.execute("SELECT id, kind FROM entries")}
     nodes = [dict(key=c["key"], entry=fmt_id(c["entry_id"]), name=c["name"], group=c["grp"], tier=c["tier"], types=c["types"],
-                  docs=json.loads(c["docs"]), title=c["title"], members=_members(con, c["entry_id"])) for c in comps]
+                  docs=json.loads(c["docs"]), title=c["title"], impl=c["impl"], members=_members(con, c["entry_id"]))
+             for c in comps]
     edges = []
     for r in con.execute("SELECT * FROM refs WHERE to_member<>'' ORDER BY rowid"):
         if r["from_id"] in ids and r["to_id"] in ids:

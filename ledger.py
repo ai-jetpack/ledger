@@ -142,6 +142,9 @@ def build_parser():
     s.add_argument("--form", default="function", help="function | property | pad | event | info | missing")
     s.add_argument("--role", help="api | emit | subscribe | note | missing (box order; default from --form)")
     s = cmd("members-many", "rows from a JSON array: [{id,key,label,detail?,form,role?}]"); s.add_argument("src")
+    s = cmd("implement", "mark a box, or one of its rows, as implemented (where: source path; empty clears)")
+    s.add_argument("id"); s.add_argument("--member", help="row key; omit to mark the box"); s.add_argument("--where", required=True)
+    s = cmd("implement-many", "implementation marks from a JSON array: [{id,member?,where}]"); s.add_argument("src")
     s = cmd("member-rm", "remove a row (refused while calls use it)"); s.add_argument("id"); s.add_argument("key"); s.add_argument("--reason", required=True)
     cmd("map", "the component map model (boxes, rows in box order, calls, side bar lists) as JSON")
     s = cmd("merge", "merge a duplicate into another entry"); s.add_argument("frm", metavar="FROM"); s.add_argument("into"); s.add_argument("--reason", required=True)
@@ -223,6 +226,10 @@ def main():
             out = A.member_set(con, author, a.id, a.key, text(a.label), text(a.detail), a.form, a.role)
         elif c == "members-many":
             out = f"{A.members_many(con, author, load_json(a.src))} members set"
+        elif c == "implement":
+            out = A.implement(con, author, a.id, a.member, text(a.where))
+        elif c == "implement-many":
+            out = f"{A.implement_many(con, author, load_json(a.src))} implementation marks set"
         elif c == "member-rm":
             out = A.member_remove(con, author, a.id, a.key, text(a.reason))
         elif c == "map":
