@@ -14,7 +14,7 @@ DEFAULT_DB = os.environ.get("LEDGER_DB", os.path.join(HERE, "ledger.db"))
 
 KINDS = ["requirement", "hardware", "model", "estimate", "measurement", "component", "policy", "technique",
          "kernel", "interface", "decision", "open-question", "non-goal", "milestone", "paper", "finding", "risk",
-         "assumption", "gap"]
+         "assumption", "gap", "future-work"]
 STATUSES = ["proposed", "accepted", "open", "deferred", "rejected"]
 # Component map: an entry becomes a box when it has a component record; its members are the rows.
 GROUPS = ["req", "eng", "mem", "sys"]                                   # request path, engine, model+memory, machine+telemetry
