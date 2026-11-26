@@ -334,6 +334,8 @@ function renderPanel(){
  panel.replaceChildren();
  if(sel&&sel.node!=null){const n=byId[sel.node];
   const head=h('div');head.append(h('h2',null,n.t),h('div','meta',n.l));if(n.impl)head.append(h('div','meta','✓ implemented in '+n.impl));panel.append(head);
+  const mine=Object.values(ISSUE).filter(x=>x.components.includes(n.id));
+  if(mine.length){const s=h('section');s.append(h('h3',null,`Open issues (${mine.length})`));const u=h('ul','list gaps');mine.forEach(x=>u.append(issueItem(x,n.id)));s.append(u);panel.append(s)}
   const s1=h('section');s1.append(h('h3',null,'Interface'));const ul=h('ul','list');
   n.rows.forEach(r=>{const li=h('li',r[3]==='x'?'g':'',r[2]&&r[3]==='f'?r[2]:r[1]);if(r[3]!=='f'&&r[2])li.append(h('span','w',r[2]));if(r[5])li.append(h('span','impl','✓ '+r[5]));ul.append(li)});s1.append(ul);panel.append(s1);
   const out=E.map((e,i)=>i).filter(i=>E[i][0]===n.id),inc=E.map((e,i)=>i).filter(i=>E[i][2]===n.id);
@@ -353,12 +355,14 @@ function renderPanel(){
   const sec=h('section');sec.append(h('h3',null,t));const ul=h('ul','list gaps');
   Object.keys(M).forEach(k=>ul.append(issueItem(ISSUE[k])));sec.append(ul);panel.append(sec)});
 }
-function issueItem(x){const on=!!sel&&sel.issue===x.id,li=h('li','iss'+(on?' on':''));
+/* node: the selected box when the item is listed in its panel, so opening or closing the issue keeps the box selected */
+function issueItem(x,node){const on=!!sel&&sel.issue===x.id,li=h('li','iss'+(on?' on':''));
  li.append(h('b',null,x.id),x.title);
- li.onclick=ev=>{if(ev.target.closest('.issbox'))return;select(on?null:{issue:x.id})};
+ if(x.components.length)li.append(h('span','w',x.components.map(k=>byId[k]?byId[k].t:k).join(' · ')));
+ li.onclick=ev=>{if(ev.target.closest('.issbox'))return;select(on?(node!=null?{node}:null):(node!=null?{issue:x.id,node}:{issue:x.id}))};
  if(!on)return li;
  const box=h('div','issbox');
- box.append(h('div','note',x.components.length?'Components: '+x.components.map(k=>byId[k]?byId[k].t:k).join(', '):'No component on the map is linked to it yet.'));
+ if(!x.components.length)box.append(h('div','note','No component on the map is linked to it yet.'));
  x.comments.forEach(c=>box.append(h('div','note',`${c.at.slice(0,16).replace('T',' ')}  ${c.text}`)));
  const ta=h('textarea');ta.placeholder='Your comment on '+x.id;const bt=h('button','btn','Add comment');bt.type='button';const er=h('div','err');
  bt.onclick=()=>{const text=ta.value.trim();if(!text)return;bt.disabled=true;
