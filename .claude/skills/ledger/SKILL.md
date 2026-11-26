@@ -13,7 +13,7 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 - **If the API is missing something, or a task takes more calls than it should, stop and propose an API change** to the user instead of working around it.
 - Set your name once: `LEDGER_AUTHOR=<you>` in the environment (PowerShell: `$env:LEDGER_AUTHOR='alpha'`); `--author NAME` can also appear anywhere on the line.
 - Long text: `--body @-` reads stdin (pipe it in: no temporary files, no quoting problems), `--body @file` reads a file. Batches read a JSON array from stdin (`-`) or a file.
-- The API enforces: you can edit your own entries and entries that record a user decision; comment on everyone else's.
+- The API enforces: you can edit your own entries and entries that record a user decision; comment on everyone else's. `main` is the administrator: it may edit any entry, delete entries, edit or delete comments and reassign authorship.
 - To see the ledger: `python ledger_viz.py serve`, then http://127.0.0.1:8765 (live while others write).
 
 | Need | Command |
@@ -90,6 +90,7 @@ The component map is generated from the ledger (viewer: http://127.0.0.1:8765/co
 - **Call (arrow)** = a reference anchored on members: `link FROM TO --comment "what passes" --to-member KEY [--from-member KEY] [--basis ID]` (batch: `links-many -` with `from, to, comment, from_member, to_member, basis`). `--basis` is the entry that justifies the call; when it is a `gap`, the arrow is drawn as not defined yet. Plain references without members are design links and are not drawn.
 - **Tier** = the box's row in the layered view, top to bottom: `app` (the executable), `service` (what it creates and serves through: API server, pipeline, model manager), `element` (GStreamer plugins: elements, tracer), `engine` (objects inside an element), `resource` (memory, weights, caches, kernels, model files), `platform` (the machine). Set it with `component ID --tier T` (or `tier` in `components-many`). It is a classification, not an order.
 - The layout is automatic (columns by call depth, or rows by tier with "By layer"); there are no coordinates in the ledger.
+- **Issues** = open gaps, unconfirmed assumptions and open questions. The side bar lists them all; a selected box's details panel lists the issues linked to it (by a reference, or as the basis of one of its calls), and every issue shows the names of its boxes. Link each issue to the boxes it concerns and name those boxes in its title by their display name on the map ("Platform description: no query of free VRAM ..."), so the user finds it under the same name in both places.
 - The user can comment on a side-bar issue from the map; those comments have author `user`. Treat them as the user's input: main records any decision they contain.
 - `check` also reports components without members, components without a tier and calls to members that do not exist.
 

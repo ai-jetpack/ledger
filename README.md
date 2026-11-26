@@ -10,7 +10,7 @@ The graph provides the necessary context for a given issue and allows mapping th
 | `ledger_api.py` | The ledger API: the only code that touches the database. Every client below goes through it. |
 | `ledger.py` | Command line over the API |
 | `ledger_viz.py`, `viewer.html` | Visualization: live force-directed graph, sortable table, disputes view, activity feed; refreshes about once a second while the ledger changes |
-| `components.html` | Component map generated from the ledger (boxes = component entries, rows = members, arrows = member-anchored references; automatic layout, or rows by tier with "By layer"; side bar with assumptions, gaps and open issues: click one to highlight its components and add a comment), served at `/components` |
+| `components.html` | Component map generated from the ledger (boxes = component entries, rows = members, arrows = member-anchored references; automatic layout, or rows by tier with "By layer"; side bar with assumptions, gaps and open issues: click one to highlight its components and add a comment; a selected box's details panel lists its own open issues first, and every issue shows the names of its boxes), served at `/components` |
 
 ## Quick start
 
@@ -24,13 +24,19 @@ python ledger_viz.py serve            # http://127.0.0.1:8765
 
 Entry ids look like `L-0001`. Text arguments accept `@path` to read from a file. The first entry has nothing to reference yet; every later entry should reference at least one other.
 
+## Entries
+
+Kinds: `requirement hardware model estimate measurement component policy technique kernel interface decision open-question non-goal milestone paper finding risk assumption gap future-work`. A `gap` is something not defined yet, an `assumption` an interpretation to confirm, a `future-work` entry a possible later improvement that is not planned (status `deferred`). Open gaps, unconfirmed assumptions and open questions are the issues the component map lists.
+
+Statuses: `proposed accepted open deferred rejected`. Rejected entries are kept, so the reasoning stays visible.
+
 ## Commands
 
 `add` (reports possible duplicates), `add-many` (JSON batch, all or nothing), `set` (create or update), `update`, `get`/`show`, `find`/`list` (searches comments and vote reasons too; `--limit`/`--offset` paging), `dump`, `comment`, `vote`, `vote-many` (JSON batch), `link`, `unlink`, `merge`, `similar` (candidate duplicates), `disagreements` (split votes), `queue VOTER` (ids a voter has not voted on or that changed since their vote), `review VOTER` (the same entries in full), `affected` (entries with their linked neighbours), `check`, `export` (Markdown), `backup` (consistent copy of the database).
 
 Component map: `component` / `components-many` (make an entry a box), `member` / `members-many` / `member-rm` (its rows: APIs, events emitted, events subscribed), `link --from-member --to-member --basis` / `links-many` (calls), `map` (the generated model as JSON). `implement ID [--member KEY] --where PATH` / `implement-many` mark a box or one of its rows as implemented (an empty `--where` clears the mark); the map shows a check on implemented rows and a done/total count on the box. `component --tier` sets a box's row in the layered view (app, service, element, engine, resource, platform). The viewer's one write is `POST /api/comment` (`{"id", "text"}`), used by the map's issue comment box; those comments have author `user`.
 
-`--author` can appear anywhere and defaults to `LEDGER_AUTHOR`. Text arguments accept `@file` or `@-` (stdin); batch commands read JSON from a file or `-` (stdin). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`) are limited to the authors `main` and `user`.
+`--author` can appear anywhere and defaults to `LEDGER_AUTHOR`. Text arguments accept `@file` or `@-` (stdin); batch commands read JSON from a file or `-` (stdin). Administrative commands (`delete-entry`, `edit-comment`, `delete-comment`, `edit-vote-reason`, `reassign-author`) are limited to the author `main`.
 
 ## Rules the tool enforces
 
@@ -38,7 +44,7 @@ Component map: `component` / `components-many` (make an entry a box), `member` /
 - Changes to an entry are logged as comments with the reason.
 - A reference needs a comment describing the relationship; entries cannot reference themselves.
 - Merging moves comments and references to the surviving entry and redirects links.
-- Only an entry's author may edit it; entries that record a decision by `user` (authored or edited by `user`) can only be edited by `user` or `main`. Others comment instead.
+- Only an entry's author may edit it, with two exceptions: any author may edit an entry that records a decision the user stated (its body carries the marker `(user`, for example "Decision (user, 2026-11-21): ..."), to fix how it is recorded; and `main` may edit any entry. Others comment instead.
 
 ## Skill
 
