@@ -171,7 +171,18 @@ function layerLayout(){
    r.forEach(n=>{const p=nb[n.id].filter(u=>!r.includes(byKey[u])).map(u=>pos[u]);n.bc=p.length?p.reduce((x,y)=>x+y,0)/p.length:pos[n.id]});
    r.sort((a,b)=>a.bc-b.bc);r.forEach((n,i)=>pos[n.id]=(i+.5)/r.length)})}
  const width=r=>r.reduce((x,n)=>x+n.w+GX,-GX),W=Math.max(...R.map(width));
- let y=20;R.forEach(r=>{let x=20+(W-width(r))/2;r.forEach(n=>{n.x=x;n.y=y;x+=n.w+GX});y+=Math.max(...r.map(n=>n.h))+GY});
+ const pack=r=>{let x=20+(W-width(r))/2;r.forEach(n=>{n.x=x;x+=n.w+GX})};
+ /* then reorder each row to minimise the summed horizontal distance between the source and target of every call:
+    move one box to every other place of its row, keep the best move, until no move shortens the arrows */
+ const links=E.filter(e=>byKey[e[0]]&&byKey[e[2]]&&e[0]!==e[2]).map(e=>[byKey[e[0]],byKey[e[2]]]);
+ const cost=()=>links.reduce((s,[a,b])=>s+Math.abs(a.x+a.w/2-b.x-b.w/2),0);
+ R.forEach(pack);let best=cost();
+ for(let pass=0,better=true;better&&pass<50;pass++){better=false;
+  R.forEach(r=>{for(let i=0;i<r.length;i++){const n=r[i];let bi=i;
+   for(let j=0;j<r.length;j++){if(j===i)continue;r.splice(i,1);r.splice(j,0,n);pack(r);const c=cost();
+    if(c<best-1e-6){best=c;bi=j;better=true}r.splice(j,1);r.splice(i,0,n)}
+   if(bi!==i){r.splice(i,1);r.splice(bi,0,n)}pack(r)}})}
+ let y=20;R.forEach(r=>{pack(r);r.forEach(n=>n.y=y);y+=Math.max(...r.map(n=>n.h))+GY});
 }
 /* automatic layout: columns by call depth (longest path, cycles broken), rows ordered by the barycentre of callers */
 function autoLayout(){
