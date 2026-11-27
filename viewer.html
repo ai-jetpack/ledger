@@ -39,6 +39,9 @@ input[type=search],select{width:100%;padding:5px 8px;border:1px solid var(--rule
 .kind{display:flex;align-items:center;gap:6px;padding:2px 4px;border-radius:5px;cursor:pointer;user-select:none}
 .kind:hover{background:var(--chip)}
 .kind.off{opacity:.35}
+.kind.on{background:var(--edge);font-weight:600}
+.klist{margin:4px 0 0;padding:0;list-style:none}
+.klist li{padding:2px 0;border-bottom:1px solid var(--edge)}
 .sw{width:10px;height:10px;border-radius:50%;flex:none}
 .kind .n{margin-left:auto;color:var(--quiet);font-variant-numeric:tabular-nums}
 label.chk{display:flex;gap:6px;align-items:center;margin:4px 0;cursor:pointer}
@@ -114,7 +117,7 @@ tr.sel td{background:rgba(47,111,222,.12)}
   </aside>
   <main id="main">
     <canvas id="cv"></canvas>
-    <div class="zoom"><button class="btn" id="fit">Fit</button><button class="btn" id="pause">Pause layout</button></div>
+    <div class="zoom"><button class="btn" id="fit">Fit</button></div>
     <div class="table-wrap" id="tableView" hidden></div>
     <div class="disp-wrap" id="dispView" hidden></div>
     <div id="tip"></div>
@@ -134,7 +137,7 @@ const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).
 let data = null, version = null, byId = new Map();
 const nodes = new Map();         // id -> {x,y,vx,vy,e,flash,vis,deg}
 let edges = [];                  // {s,t,c}
-let sel = null, hover = null, view = "graph", alpha = 1, paused = false;
+let sel = null, hover = null, view = "graph";
 const filt = {q:"", off:new Set(), status:"", disp:false, merged:false};
 let seenEvents = new Set(), firstLoad = true, sortKey = "id", sortDir = 1;
 
@@ -157,7 +160,7 @@ function ingest(d){
     if (!n){
       const near = [...e.references, ...e.referenced_by].map(r=>nodes.get(r.id)).find(Boolean);
       const a = Math.random()*Math.PI*2, r = near ? 30+Math.random()*30 : 150+Math.random()*150;
-      n = {x:(near?near.x:0)+Math.cos(a)*r, y:(near?near.y:0)+Math.sin(a)*r, vx:0, vy:0, flash: firstLoad?0:t};
+      n = {x:(near?near.x:0)+Math.cos(a)*r, y:(near?near.y:0)+Math.sin(a)*r, vx:0, vy:0, flash: firstLoad?0:t, fresh:true};
       nodes.set(e.id, n);
     } else if (prev.has(e.id) && sig(prev.get(e.id)) !== sig(e)) n.flash = t;
     n.e = e; n.id = e.id;
@@ -167,10 +170,10 @@ function ingest(d){
   for (const e of d.entries) if (!e.merged_into) for (const r of e.references) if (byId.has(r.id)) edges.push({s:e.id,t:r.id,c:r.comment});
   for (const n of nodes.values()) n.deg = 0;
   for (const g of edges){ nodes.get(g.s).deg++; nodes.get(g.t).deg++; }
-  alpha = Math.max(alpha, firstLoad ? 1 : 0.35);
+  settle(!firstLoad);
   applyFilter(); renderStats(); renderKinds(); renderFeed(); renderDetail();
   if (view==="table") renderTable(); if (view==="disputes") renderDisputes();
-  if (firstLoad){ firstLoad=false; setTimeout(fit, 900); }
+  if (firstLoad){ firstLoad=false; fit(); }
 }
 
 function visible(e){
@@ -218,11 +221,13 @@ function renderStats(){
 function renderKinds(){
   const cnt = {}; for (const e of data.entries) if (!e.merged_into) cnt[e.kind]=(cnt[e.kind]||0)+1;
   $("#kinds").innerHTML = data.kinds.filter(k=>cnt[k]).map(k =>
-    `<div class="kind ${filt.off.has(k)?"off":""}" data-k="${esc(k)}"><span class="sw" style="background:${kindColor[k]}"></span>${esc(k)}<span class="n">${cnt[k]}</span></div>`).join("");
+    `<div class="kind ${filt.off.has(k)?"off":filt.off.size?"on":""}" data-k="${esc(k)}" title="click: only this kind; Ctrl+click: add or remove"><span class="sw" style="background:${kindColor[k]}"></span>${esc(k)}<span class="n">${cnt[k]}</span></div>`).join("");
 }
 $("#kinds").addEventListener("click", ev=>{
   const k = ev.target.closest(".kind")?.dataset.k; if (!k) return;
-  filt.off.has(k) ? filt.off.delete(k) : filt.off.add(k); refresh();
+  if (ev.ctrlKey || ev.metaKey) filt.off.has(k) ? filt.off.delete(k) : filt.off.add(k);
+  else { filt.off = new Set(data.kinds.filter(x=>x!==k)); }
+  refresh();
 });
 $("#allK").onclick = ()=>{ filt.off.clear(); refresh(); };
 $("#noK").onclick = ()=>{ data.kinds.forEach(k=>filt.off.add(k)); refresh(); };
@@ -230,7 +235,7 @@ $("#q").oninput = e=>{ filt.q = e.target.value.trim(); refresh(); };
 $("#status").onchange = e=>{ filt.status = e.target.value; refresh(); };
 $("#onlyDisp").onchange = e=>{ filt.disp = e.target.checked; refresh(); };
 $("#showMerged").onchange = e=>{ filt.merged = e.target.checked; refresh(); };
-function refresh(){ applyFilter(); renderKinds(); alpha=Math.max(alpha,.3); if(view==="table") renderTable(); if(view==="disputes") renderDisputes(); }
+function refresh(){ applyFilter(); renderKinds(); if (!sel) renderDetail(); if(view==="table") renderTable(); if(view==="disputes") renderDisputes(); }
 
 document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>{
   view = b.dataset.v;
@@ -255,7 +260,14 @@ function fmtText(t){ return esc(t).replace(/\bL-\d{4}\b/g, m => byId.has(m)?`<a 
 function renderDetail(){
   const box = $("#detail");
   const e = sel && byId.get(sel);
-  if (!e){ box.innerHTML = `<div class="empty">Click an entry to see its votes, references and comments.</div>`; return; }
+  if (!e){
+    const kinds = data ? data.kinds.filter(k=>!filt.off.has(k)) : [];
+    if (!data || !filt.off.size || !kinds.length){ box.innerHTML = `<div class="empty">Click an entry to see its votes, references and comments.</div>`; return; }
+    const list = data.entries.filter(x=>!x.merged_into && kinds.includes(x.kind)).sort((a,b)=>a.id<b.id?-1:1);
+    box.innerHTML = `<div class="dt"><div class="meta">${kinds.map(k=>`<span class="sw" style="display:inline-block;background:${kindColor[k]}"></span> <b>${esc(k)}</b>`).join(" · ")} · ${list.length} entries</div>
+      <ul class="klist">${list.map(x=>`<li><a class="eid" data-id="${x.id}">${x.id}</a> ${esc(x.title)} <span class="n">[${esc(x.status)}]</span></li>`).join("")}</ul></div>`;
+    return;
+  }
   const sc = e.score>0?"var(--good)":e.score<0?"var(--bad)":"var(--quiet)";
   box.innerHTML = `<div class="dt">
     <div class="meta"><span class="sw" style="display:inline-block;background:${kindColor[e.kind]}"></span> <b>${e.id}</b> · ${esc(e.kind)} · ${esc(e.status)} · by ${esc(e.author)}
@@ -327,26 +339,30 @@ function resize(){ const r = cv.getBoundingClientRect(); dpr = devicePixelRatio|
 new ResizeObserver(resize).observe(cv);
 const rad = n => 4 + Math.sqrt(n.deg||0)*2.2;
 
-function tick(){
-  if (paused || alpha < 0.005) return;
-  const vs = [...nodes.values()].filter(n=>n.vis);
+// The layout is computed at once, never animated: the whole graph on the first load, then only the entries that
+// appear (the others keep their place). Every node is placed whatever the filter, so filtering moves nothing.
+function settle(onlyNew){
+  const vs = [...nodes.values()];
+  if (onlyNew && !vs.some(n=>n.fresh)) return;
+  for (let alpha=onlyNew?0.35:1; alpha>=0.005; alpha*=0.992) step(vs, alpha, onlyNew);
+  for (const n of vs){ n.fresh=false; n.vx=n.vy=0; }
+}
+function step(vs, alpha, onlyNew){
   for (let i=0;i<vs.length;i++){ const a=vs[i];
     for (let j=i+1;j<vs.length;j++){ const b=vs[j];
       let dx=a.x-b.x, dy=a.y-b.y, d2=dx*dx+dy*dy;
       if (d2 > 160000) continue; if (d2 < 1){ dx=Math.random()-.5; dy=Math.random()-.5; d2=1; }
       const f = 900/d2; a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f; } }
-  for (const g of edges){ const a=nodes.get(g.s), b=nodes.get(g.t); if (!a.vis||!b.vis) continue;
+  for (const g of edges){ const a=nodes.get(g.s), b=nodes.get(g.t);
     const dx=b.x-a.x, dy=b.y-a.y, d=Math.sqrt(dx*dx+dy*dy)||1, f=(d-70)*0.012;
     a.vx+=dx/d*f*d*0.05; a.vy+=dy/d*f*d*0.05; b.vx-=dx/d*f*d*0.05; b.vy-=dy/d*f*d*0.05; }
-  for (const n of vs){ if (n===drag) continue; n.vx -= n.x*0.0025; n.vy -= n.y*0.0025;
+  for (const n of vs){ if (onlyNew && !n.fresh){ n.vx=n.vy=0; continue; } n.vx -= n.x*0.0025; n.vy -= n.y*0.0025;
     n.vx*=0.55; n.vy*=0.55; n.x += Math.max(-20,Math.min(20,n.vx))*alpha; n.y += Math.max(-20,Math.min(20,n.vy))*alpha; }
-  alpha *= 0.992;
 }
 
 // ---------- graph: drawing
 function neighbors(id){ const s=new Set([id]); for (const g of edges){ if(g.s===id) s.add(g.t); if(g.t===id) s.add(g.s);} return s; }
 function draw(){
-  tick();
   ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,W,H);
   if (view!=="graph"){ requestAnimationFrame(draw); return; }
   ctx.translate(W/2+T.x, H/2+T.y); ctx.scale(T.k,T.k);
@@ -399,9 +415,9 @@ function pick(sx,sy){ const [x,y]=toWorld(sx,sy); let best=null, bd=Infinity;
   for (const n of nodes.values()){ if(!n.vis) continue; const d=Math.hypot(n.x-x,n.y-y); if (d < rad(n)+4/T.k && d<bd){ bd=d; best=n; } } return best; }
 let drag=null, pan=null, moved=false;
 cv.addEventListener("mousedown", ev=>{ const r=cv.getBoundingClientRect(), sx=ev.clientX-r.left, sy=ev.clientY-r.top; moved=false;
-  const n = pick(sx,sy); if (n){ drag=n; alpha=Math.max(alpha,.2);} else pan={sx:ev.clientX, sy:ev.clientY, x:T.x, y:T.y}; cv.style.cursor="grabbing"; });
+  const n = pick(sx,sy); if (n){ drag=n; } else pan={sx:ev.clientX, sy:ev.clientY, x:T.x, y:T.y}; cv.style.cursor="grabbing"; });
 addEventListener("mousemove", ev=>{ const r=cv.getBoundingClientRect(), sx=ev.clientX-r.left, sy=ev.clientY-r.top;
-  if (drag){ const [x,y]=toWorld(sx,sy); drag.x=x; drag.y=y; drag.vx=drag.vy=0; moved=true; alpha=Math.max(alpha,.15); }
+  if (drag){ const [x,y]=toWorld(sx,sy); drag.x=x; drag.y=y; moved=true; }
   else if (pan){ T.x = pan.x + ev.clientX-pan.sx; T.y = pan.y + ev.clientY-pan.sy; moved=true; }
   else if (ev.target===cv){ const n=pick(sx,sy); hover = n?n.id:null; const tip=$("#tip");
     if (n){ tip.style.display="block"; tip.style.left=(sx+14)+"px"; tip.style.top=(sy+10)+"px";
@@ -416,7 +432,6 @@ function fit(){ const vs=[...nodes.values()].filter(n=>n.vis); if(!vs.length) re
   T.k = Math.min(3, 0.9*Math.min(W/((x1-x0)||1), H/((y1-y0)||1))); T.x = -(x0+x1)/2*T.k; T.y = -(y0+y1)/2*T.k; }
 function centerOn(n){ T.x = -n.x*T.k; T.y = -n.y*T.k; }
 $("#fit").onclick = fit;
-$("#pause").onclick = e=>{ paused=!paused; e.target.textContent = paused?"Resume layout":"Pause layout"; if(!paused) alpha=Math.max(alpha,.3); };
 addEventListener("keydown", ev=>{ if (ev.key==="Escape") select(null); });
 
 // ---------- start

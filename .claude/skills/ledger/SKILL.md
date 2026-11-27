@@ -18,7 +18,7 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 
 | Need | Command |
 | --- | --- |
-| Your review work, in full | `review` (`--comments N`, default 2) |
+| Your review work, in full | `review --brief` (`--comments N`, default 2) |
 | Just the ids to review | `queue` |
 | Read entries | `get IDS --comments N` |
 | Search titles, bodies, comments and vote reasons (paged) | `find "words" --limit N --offset N` (`--kind`, `--status`, `--by alpha`) |
@@ -32,7 +32,7 @@ A ledger holds any number of entries. Each entry has an id (`L-0001`), a kind, a
 
 Batch formats:
 - add-many: `[{"kind": "...", "title": "...", "body": "...", "status": "proposed", "refs": [{"id": "L-0012", "comment": "implements"}, {"id": "$0", "comment": "part of"}]}]`. A reference id `$k` points at the k-th item of the same batch. All or nothing.
-- vote-many: `[{"id": "L-0012", "value": "up", "reason": "..."}]`. All or nothing.
+- vote-many: `[{"id": "L-0012", "value": "up", "reason": "...", "reply_to": 123}]` (`reply_to` optional: the vote's reason is posted as a reply to that comment). All or nothing.
 
 ## Writing entries
 
@@ -54,16 +54,16 @@ Vote up or down on every entry you review, with a reason that names the specific
 ## Procedures (fewest calls)
 
 **REVIEW**: one read, one write.
-1. `review` returns every entry you have not voted on or that changed since your vote, in full (last 2 comments each).
+1. `review --brief` returns every entry you have not voted on or that changed since your vote: the body, your own vote and every down vote in full, the names of the other up voters, references (incoming ones without titles) and the last 2 comments that are not vote reasons.
 2. Judge them all, then send every vote in one `vote-many`.
 3. Done when `review` says nothing to review.
 
 **DEBATE** (two voters disagree)
 1. `disagreements` lists split entries with each vote and the comment id to reply to.
-2. `get` the entry with all comments, then reply in its thread (`comment ID --reply-to N`, N = the other side's vote comment). Engage their specific argument with evidence. Do not concede to be agreeable, and do not defend an error once the evidence is against you.
+2. `get` the disputed entries with all comments (one call for all of them), then answer every one in one `vote-many`: each item is your vote with `reply_to` N (the other side's vote comment), and its reason is your reply. Engage their specific argument with evidence. Do not concede to be agreeable, and do not defend an error once the evidence is against you.
 3. End the reply with exactly one line:
    - `STANCE: HOLD`: you still disagree; say what evidence would change your mind.
-   - `STANCE: CONCEDE`: then re-vote to match.
+   - `STANCE: CONCEDE`: the item's value is the side you now take.
    - `STANCE: AMEND`: only for your own entry; fix it with `update` and keep your vote.
 4. Repeat until no entry is disputed.
 
@@ -96,4 +96,4 @@ The component map is generated from the ledger (viewer: http://127.0.0.1:8765/co
 
 ## Keeping usage small
 
-Use `review`, `disagreements` and `affected` as your work lists; never read the whole ledger. Batch writes with `add-many` and `vote-many`. Read entries with few comments unless you are in a debate. Page long searches with `--limit` and `--offset`.
+Use `review --brief`, `disagreements` and `affected` as your work lists; never read the whole ledger. Batch writes with `add-many` and `vote-many`. Read entries with few comments unless you are in a debate. Page long searches with `--limit` and `--offset`.

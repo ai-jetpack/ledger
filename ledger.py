@@ -53,23 +53,42 @@ def refs_of(items):
     return out
 
 
-def show_entry(d):
+VOTE_ECHO = ("[upvote", "[downvote")
+
+
+def show_entry(d, brief_for=None, keep=None):
+    """brief_for: the reviewing voter. Brief output keeps what a review needs: the voter's own vote and every down
+    vote in full, other up votes as names; incoming references without titles; no comments that only repeat a vote
+    reason; the last `keep` other comments."""
     print(f"{d['id']}  [{d['kind']}/{d['status']}]  score {d['score']:+d} (up {d['up']}, down {d['down']})  by {d['author']}")
     print(f"  title: {d['title']}")
     if "merged_into" in d:
         print(f"  MERGED INTO {d['merged_into']}")
     for line in (d.get("body") or "").splitlines():
         print(f"  | {line}")
-    for v in d.get("votes", []):
+    votes = d.get("votes", [])
+    shown = votes if brief_for is None else [v for v in votes if v["voter"] == brief_for or v["value"] < 0]
+    for v in shown:
         print(f"  vote {v['value']:+d} by {v['voter']}: {v['reason']}")
+    rest = [v["voter"] for v in votes if v not in shown]
+    if rest:
+        print(f"  up: {', '.join(rest)}")
     for r in d.get("references", []):
         print(f"  -> {r['id']} ({r['title']}): {r['comment']}")
     for r in d.get("referenced_by", []):
-        print(f"  <- {r['id']} ({r['title']}): {r['comment']}")
-    hidden = d.get("comment_count", 0) - len(d.get("comments", []))
-    if hidden > 0:
-        print(f"  ({hidden} older comments not shown)")
-    for c in d.get("comments", []):
+        print(f"  <- {r['id']}: {r['comment']}" if brief_for else f"  <- {r['id']} ({r['title']}): {r['comment']}")
+    cs = d.get("comments", [])
+    if brief_for is not None:
+        cs = [c for c in cs if not c["text"].startswith(VOTE_ECHO)]
+        cs = cs if keep is None else cs[-keep:] if keep else []
+        hidden = d.get("comment_count", 0) - len(cs)
+        if hidden > 0:
+            print(f"  ({hidden} older or vote comments not shown)")
+    else:
+        hidden = d.get("comment_count", 0) - len(cs)
+        if hidden > 0:
+            print(f"  ({hidden} older comments not shown)")
+    for c in cs:
         rt = f" (reply to #{c['reply_to']})" if c["reply_to"] else ""
         print(f"  #{c['id']} {c['author']}{rt}: {c['text']}")
 
@@ -153,6 +172,7 @@ def build_parser():
     s = cmd("queue", "ids a voter must (re)vote on"); s.add_argument("voter", nargs="?")
     s = cmd("review", "a voter's whole review queue, in full"); s.add_argument("voter", nargs="?")
     s.add_argument("--comments", default="2", help="all | none | N (default 2)")
+    s.add_argument("--brief", action="store_true", help="only the voter's own and down votes in full, incoming references without titles, no vote-echo comments")
     s = cmd("affected", "entries with their linked neighbours (for propagating a change)")
     s.add_argument("ids", nargs="*"); s.add_argument("--query")
     s = cmd("check", "integrity and review status"); s.add_argument("--voter", action="append", default=[])
@@ -243,7 +263,8 @@ def main():
         elif c == "queue":
             out = A.review_queue(con, a.voter or author)
         elif c == "review":
-            out = A.review(con, a.voter or author, comments_arg(a.comments))
+            brief_for = (a.voter or author) if a.brief else None
+            out = A.review(con, a.voter or author, "all" if brief_for else comments_arg(a.comments))
             if not out and not as_json:
                 print("nothing to review"); return
         elif c == "affected":
@@ -281,8 +302,14 @@ def main():
     if as_json:
         print(json.dumps(out, indent=1, ensure_ascii=False))
     elif isinstance(out, list) and out and isinstance(out[0], dict) and "body" in out[0]:
+        keep = comments_arg(a.comments) if c == "review" else None
+        keep = (0 if keep == "none" else None if keep == "all" else keep)
         for d in out:
-            show_entry(d); print()
+            if c == "review" and brief_for:
+                show_entry(d, brief_for, keep)
+            else:
+                show_entry(d)
+            print()
     elif isinstance(out, list) and out and "a" in out[0]:
         for q in out:
             print(f"{q['score']:.2f}  {q['a']} {q['a_title']}  <->  {q['b']} {q['b_title']}")
