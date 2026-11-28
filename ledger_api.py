@@ -603,13 +603,18 @@ def reassign_author(con, author, old, new, reason):
 
 
 def delete_entry(con, author, eid, reason):
-    """Remove an entry completely, with its links, votes and comments. Logged on each entry that linked to it."""
+    """Remove an entry completely, with its links, votes, comments and component box (rows included); calls that cite
+    it as their basis lose the basis. Logged on each entry that linked to it."""
     _admin(author)
     eid = parse_id(eid)
     with tx(con):
         row = _entry(con, eid, active=False)
         linked = {r[0] for r in con.execute("SELECT from_id FROM refs WHERE to_id=? UNION SELECT to_id FROM refs WHERE from_id=?", (eid, eid))}
         con.execute("DELETE FROM refs WHERE from_id=? OR to_id=?", (eid, eid))
+        # calls that cite it as their basis keep the call, without the basis; its box and rows go with it
+        con.execute("UPDATE refs SET basis=NULL WHERE basis=?", (eid,))
+        con.execute("DELETE FROM members WHERE entry_id=?", (eid,))
+        con.execute("DELETE FROM components WHERE entry_id=?", (eid,))
         con.execute("DELETE FROM votes WHERE entry_id=?", (eid,))
         con.execute("UPDATE comments SET reply_to=NULL WHERE reply_to IN (SELECT id FROM comments WHERE entry_id=?)", (eid,))
         con.execute("DELETE FROM comments WHERE entry_id=?", (eid,))
